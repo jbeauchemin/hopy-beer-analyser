@@ -73,10 +73,10 @@ function getRealisticHeaders(referrer = null) {
 
 /** Limiteur très simple */
 let requestCounter = 0;
-const MAX_REQUESTS_PER_SESSION = 25;
+const MAX_REQUESTS_PER_SESSION = 50; // Augmenté pour permettre de tester lessep-sans-alcool
 
 /** GET avec retries */
-async function fetchWithRetry(url, maxRetries = 3, referrer = null) {
+async function fetchWithRetry(url, maxRetries = 2, referrer = null) { // Réduit de 3 à 2 pour économiser requêtes
     if (requestCounter >= MAX_REQUESTS_PER_SESSION) {
         console.warn('⚠️ Limite de requêtes atteinte pour cette session');
         return null;
@@ -206,10 +206,10 @@ function validateBeerMatch(beerResult, product) {
         if (beerTokens.has(token)) matches++;
     }
 
-    // Ratio de correspondance (au moins 40% des tokens doivent matcher)
+    // Ratio de correspondance (au moins 60% des tokens doivent matcher)
     const ratio = productTokens.length > 0 ? matches / productTokens.length : 1;
 
-    if (ratio < 0.4) {
+    if (ratio < 0.6) {
         console.log(`⚠️ Validation échouée: "${beerResult.beer_name}" ne correspond pas à "${product}" (${Math.round(ratio * 100)}% match)`);
         return false;
     }

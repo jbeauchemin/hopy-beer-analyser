@@ -1,0 +1,4 @@
+# Git Ignore File for Node.js Projects
+node_modules/
+dist/
+.env

@@ -411,8 +411,8 @@ async function fetchFromVeuxTuUneBiere(arg1, arg2) {
 
             console.log(`🔍 Test "${query}": ${baseVariations.length} variations base + ${alcoholFreeVariations.length} sans alcool`);
 
-            // Tester d'abord les variations de base (sans suffixes numériques)
-            for (const slugVar of baseVariations.slice(0, 3)) {
+            // Tester d'abord les variations de base
+            for (const slugVar of baseVariations.slice(0, 4)) {
                 if (result) break;
                 const url = `https://veuxtuunebiere.com/products/${slugVar}`;
                 result = await tryParseProductUrl(url, query);
@@ -422,9 +422,9 @@ async function fetchFromVeuxTuUneBiere(arg1, arg2) {
                 }
             }
 
-            // Si toujours rien, tester les variations sans alcool
+            // Si toujours rien, tester les variations sans alcool (AUGMENTÉ À 10 pour inclure lessep-sans-alcool)
             if (!result) {
-                for (const slugVar of alcoholFreeVariations.slice(0, 5)) {
+                for (const slugVar of alcoholFreeVariations.slice(0, 10)) {
                     if (result) break;
                     const url = `https://veuxtuunebiere.com/products/${slugVar}`;
                     result = await tryParseProductUrl(url, query);

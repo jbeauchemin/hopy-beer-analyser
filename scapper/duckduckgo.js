@@ -275,9 +275,11 @@ async function searchDuckDuckGo(query, requiredHost, requiredPathPrefix = '/prod
                     await sleep(600 + Math.random() * 900);
                 }
 
-                // Pas validé ? On ne retourne rien plutôt qu'un mauvais résultat
-                console.log('❌ Aucun résultat validé pour cette requête');
+                // Pas validé ? Renvoie le premier candidat filtré (best-effort)
+                const fallback = productCandidates[0] || null;
                 await page.close();
+                await browser.close();
+                return fallback;
             } catch (err) {
                 console.error('❌ Erreur puppeteer DDG:', err.message);
             } finally {

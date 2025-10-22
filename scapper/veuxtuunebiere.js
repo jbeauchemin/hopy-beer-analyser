@@ -259,35 +259,42 @@ async function fetchFromVeuxTuUneBiere(arg1, arg2) {
         console.log('🔄 Aucun résultat via DuckDuckGo — fallback sur slugs');
         // on énumère uniquement sur le produit (plus stable pour slugs)
         const baseList = generateQueryFallbacks(product || producer || '');
+        // INVERSION : tester les queries courtes EN PREMIER (Lesseps avant Pit Caribou IPA de Lesseps)
+        baseList.reverse();
+
         for (const query of baseList) {
             if (result) break;
             const baseSlug = generateSlug(query);
 
-            // Générer variations simples
-            const slugVariants = [
-                baseSlug,
-                baseSlug.endsWith('s') ? baseSlug.slice(0, -1) : null, // lesseps → lessep
-            ].filter(Boolean);
+            // Ajouter variation sans 's' final (lesseps → lessep)
+            const slugVariants = [baseSlug];
+            if (baseSlug.endsWith('s')) {
+                slugVariants.push(baseSlug.slice(0, -1));
+            }
 
-            console.log(`🔍 Essai slug: "${baseSlug}" (+ variantes sans alcool)`);
+            console.log(`🔍 Essai slug de base: "${baseSlug}"`);
 
-            // Pour chaque variante, essayer: base, base-sans-alcool, base-1, base-2
             for (const slug of slugVariants) {
                 if (result) break;
-
-                const toTry = [
-                    slug,
-                    `${slug}-sans-alcool`,
-                    `${slug}-1`,
-                    `${slug}-2`,
-                ];
-
-                for (const finalSlug of toTry) {
+                // Tester: slug, slug-sans-alcool, slug-1, slug-2, slug-3
+                for (let i = 0; i <= 3; i++) {
                     if (result) break;
+                    const finalSlug = i === 0 ? slug : `${slug}-${i}`;
                     const url = `https://veuxtuunebiere.com/products/${finalSlug}`;
+                    console.log(`🔍 Tentative: ${url}`);
                     result = await tryParseProductUrl(url, query);
                     if (result) {
                         console.log(`✅ Correspondance trouvée avec slug "${finalSlug}"`);
+                        break;
+                    }
+                }
+                // Tester aussi avec -sans-alcool
+                if (!result) {
+                    const url = `https://veuxtuunebiere.com/products/${slug}-sans-alcool`;
+                    console.log(`🔍 Tentative: ${url}`);
+                    result = await tryParseProductUrl(url, query);
+                    if (result) {
+                        console.log(`✅ Correspondance trouvée avec slug "${slug}-sans-alcool"`);
                         break;
                     }
                 }

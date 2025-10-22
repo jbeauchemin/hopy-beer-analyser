@@ -61,29 +61,14 @@ function significantTokens(str) {
 }
 
 // si on a (producer, product) on génère plusieurs candidats de requête
-// incluant les variantes sans alcool
 function buildQueryCandidates(producer, product) {
     const cand = [];
-    const alcoholFreeVariants = ['sans alcool', 'NA', 'alcohol free', 'non-alcoholic'];
-
     if (producer && product) {
         cand.push(`${producer} ${product}`);
         cand.push(`${product} ${producer}`);
         cand.push(product);
-
-        // Ajouter des variantes sans alcool
-        for (const variant of alcoholFreeVariants) {
-            cand.push(`${producer} ${product} ${variant}`);
-            cand.push(`${product} ${variant}`);
-        }
     } else {
-        const base = (product || producer || '').trim();
-        cand.push(base);
-
-        // Ajouter des variantes sans alcool
-        for (const variant of alcoholFreeVariants) {
-            cand.push(`${base} ${variant}`);
-        }
+        cand.push((product || producer || '').trim());
     }
     return uniq(cand);
 }

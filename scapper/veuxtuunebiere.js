@@ -48,6 +48,41 @@ function buildSearchCandidates(producer, product) {
     });
 }
 
+/** Générer des variations de slug (enlever lettres finales, etc.) */
+function generateSlugVariations(baseSlug) {
+    const variations = [baseSlug];
+
+    // Enlever 's', 'e', 'es', 'x' finaux (ex: "lesseps" → "lessep")
+    if (baseSlug.endsWith('s')) {
+        variations.push(baseSlug.slice(0, -1));
+    }
+    if (baseSlug.endsWith('es')) {
+        variations.push(baseSlug.slice(0, -2));
+    }
+    if (baseSlug.endsWith('e')) {
+        variations.push(baseSlug.slice(0, -1));
+    }
+    if (baseSlug.endsWith('x')) {
+        variations.push(baseSlug.slice(0, -1));
+    }
+
+    // Enlever les mots courts au début/fin (de, le, la, etc.)
+    const parts = baseSlug.split('-').filter(p => p.length > 0);
+    if (parts.length > 1) {
+        // Enlever premier mot s'il fait < 3 chars
+        if (parts[0].length < 3) {
+            variations.push(parts.slice(1).join('-'));
+        }
+        // Enlever dernier mot s'il fait < 3 chars
+        if (parts[parts.length - 1].length < 3) {
+            variations.push(parts.slice(0, -1).join('-'));
+        }
+    }
+
+    // Dédupliquer
+    return [...new Set(variations)];
+}
+
 /** User-Agent random + headers réalistes */
 function getRandomUserAgent() {
     const uas = [
@@ -73,7 +108,7 @@ function getRealisticHeaders(referrer = null) {
 
 /** Limiteur très simple */
 let requestCounter = 0;
-const MAX_REQUESTS_PER_SESSION = 25;
+const MAX_REQUESTS_PER_SESSION = 100; // Augmenté pour permettre plus de variations
 
 /** GET avec retries */
 async function fetchWithRetry(url, maxRetries = 3, referrer = null) {
@@ -262,15 +297,21 @@ async function fetchFromVeuxTuUneBiere(arg1, arg2) {
         for (const query of baseList) {
             if (result) break;
             const baseSlug = generateSlug(query);
-            console.log(`🔍 Essai slug de base: "${baseSlug}"`);
-            for (let i = 0; i <= 5; i++) {
-                const slug = i === 0 ? baseSlug : `${baseSlug}-${i}`;
-                const url = `https://veuxtuunebiere.com/products/${slug}`;
-                console.log(`🔍 Tentative ${i + 1}/6: ${url}`);
-                result = await tryParseProductUrl(url, query);
-                if (result) {
-                    console.log(`✅ Correspondance trouvée avec slug "${slug}"`);
-                    break;
+            const slugVariations = generateSlugVariations(baseSlug);
+
+            console.log(`🔍 Essai slugs pour "${query}": ${slugVariations.join(', ')}`);
+
+            for (const slugVar of slugVariations) {
+                if (result) break;
+                // Pour chaque variation, essayer avec suffixes numériques
+                for (let i = 0; i <= 3; i++) {
+                    const slug = i === 0 ? slugVar : `${slugVar}-${i}`;
+                    const url = `https://veuxtuunebiere.com/products/${slug}`;
+                    result = await tryParseProductUrl(url, query);
+                    if (result) {
+                        console.log(`✅ Correspondance trouvée avec slug "${slug}"`);
+                        break;
+                    }
                 }
             }
         }

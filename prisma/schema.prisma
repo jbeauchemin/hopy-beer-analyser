@@ -1,0 +1,41 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Producer {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  beers     Beer[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("producers")
+}
+
+model Beer {
+  id          Int      @id @default(autoincrement())
+  productName String
+  producerId  Int?
+  producer    Producer? @relation(fields: [producerId], references: [id])
+
+  // Données de base
+  abv         Decimal?  @db.Decimal(5, 2)
+  ibu         Decimal?  @db.Decimal(5, 1)
+  rating      Decimal?  @db.Decimal(3, 2)
+  description String?   @db.Text
+  imageUrl    String?
+
+  // Métadonnées
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("beers")
+}

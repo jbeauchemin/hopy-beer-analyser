@@ -181,6 +181,43 @@ async function tryParseProductUrl(url, fallbackName, sourceLabel) {
     return parseBeerPage($, fallbackName, sourceLabel);
 }
 
+/** Validation stricte du résultat pour éviter les faux positifs */
+function validateBeerMatch(beerResult, product) {
+    if (!beerResult || !product) return true; // Si pas de contrainte, accepter
+
+    const normalize = (s) => (s || '')
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const beerName = normalize(beerResult.beer_name || '');
+    const searchProduct = normalize(product);
+
+    // Tokenizer
+    const tokens = (s) => s.split(' ').filter(t => t.length > 2);
+    const beerTokens = new Set(tokens(beerName));
+    const productTokens = tokens(searchProduct);
+
+    // Compter combien de tokens du produit sont dans le nom de la bière
+    let matches = 0;
+    for (const token of productTokens) {
+        if (beerTokens.has(token)) matches++;
+    }
+
+    // Ratio de correspondance (au moins 40% des tokens doivent matcher)
+    const ratio = productTokens.length > 0 ? matches / productTokens.length : 1;
+
+    if (ratio < 0.4) {
+        console.log(`⚠️ Validation échouée: "${beerResult.beer_name}" ne correspond pas à "${product}" (${Math.round(ratio * 100)}% match)`);
+        return false;
+    }
+
+    console.log(`✅ Validation réussie: "${beerResult.beer_name}" (${Math.round(ratio * 100)}% match)`);
+    return true;
+}
+
 /** 🔎 Recherche DuckDuckGo (prioritaire) — avec opts producer/product */
 async function fetchViaDuckDuckGo(producer, product, query) {
     console.log(`🔁 Recherche DuckDuckGo pour "${query}" (site: veuxtuunebiere.com)`);
@@ -196,11 +233,18 @@ async function fetchViaDuckDuckGo(producer, product, query) {
             return null;
         }
         if (duckUrl.includes('/products/')) {
-            return await tryParseProductUrl(
+            const result = await tryParseProductUrl(
                 duckUrl,
                 query,
                 'veuxtuunebiere.com (via DuckDuckGo)'
             );
+
+            // VALIDATION STRICTE : rejeter si ne correspond pas au produit
+            if (result && !validateBeerMatch(result, product)) {
+                return null; // Rejeter ce résultat → passera au fallback slugs
+            }
+
+            return result;
         }
         console.log('❌ URL non-produit détectée via DuckDuckGo');
         return null;

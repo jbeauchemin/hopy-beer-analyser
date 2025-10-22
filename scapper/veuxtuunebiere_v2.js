@@ -17,7 +17,7 @@ const CONFIG = {
     MAX_REQUESTS: 50,
     RETRY_ATTEMPTS: 2,
     TIMEOUT_MS: 20000,
-    MIN_SCORE_THRESHOLD: 0.70, // 70% minimum pour accepter
+    MIN_SCORE_THRESHOLD: 0.55, // 55% minimum pour accepter (ajusté pour variations orthographiques)
     PRODUCT_WEIGHT: 0.6,
     PRODUCER_WEIGHT: 0.4,
 };
@@ -274,17 +274,43 @@ async function collectAllCandidates(producer, product) {
 function calculateTokenOverlap(text1, text2) {
     if (!text1 || !text2) return 0;
 
-    const tokens1 = new Set(tokenize(text1));
+    const tokens1 = tokenize(text1);
     const tokens2 = tokenize(text2);
 
     if (tokens2.length === 0) return 0;
 
-    let matches = 0;
-    for (const token of tokens2) {
-        if (tokens1.has(token)) matches++;
+    let totalScore = 0;
+    for (const token2 of tokens2) {
+        let bestMatch = 0;
+
+        for (const token1 of tokens1) {
+            // Match exact
+            if (token1 === token2) {
+                bestMatch = 1.0;
+                break;
+            }
+
+            // Match avec pluriel (lessep vs lesseps)
+            const t1 = token1.replace(/s$/, '');
+            const t2 = token2.replace(/s$/, '');
+            if (t1 === t2 && t1.length >= 3) {
+                bestMatch = Math.max(bestMatch, 0.95);
+                continue;
+            }
+
+            // Match substring (lessep contenu dans lesseps ou vice-versa)
+            if (token1.length >= 4 && token2.length >= 4) {
+                if (token1.includes(token2) || token2.includes(token1)) {
+                    const ratio = Math.min(token1.length, token2.length) / Math.max(token1.length, token2.length);
+                    bestMatch = Math.max(bestMatch, 0.85 * ratio);
+                }
+            }
+        }
+
+        totalScore += bestMatch;
     }
 
-    return matches / tokens2.length;
+    return totalScore / tokens2.length;
 }
 
 function scoreCandidate(candidate, producer, product) {

@@ -1,5 +1,5 @@
 const { getUntappdData } = require('./scapper/untapped');
-const { fetchFromVeuxTuUneBiere } = require('./scapper/veuxtuunebiere');
+const { fetchFromVeuxTuUneBiere } = require('./scapper/veuxtuunebiere_v2');
 
 /** Parse args: supporte flags (--producer=, --product=) et positionnels ("Prod" "Beer") */
 function parseArgs(argv) {
@@ -33,9 +33,9 @@ function parseArgs(argv) {
 
 /**
  * analyzeBeers(producer, product)
- * - Fait la recherche avec "producer + product"
- * - Fallback VtUB: si rien avec la requête combinée, réessaie avec product seul (si fourni)
- * - Retourne les bruts pour récolter un max de données (pas de merge ici)
+ * - Utilise la nouvelle API v2 avec scoring 2-phases
+ * - Passe producer et product séparément pour un meilleur matching
+ * - Retourne les données brutes des deux sources
  *
  * @param {string|null} producer
  * @param {string|null} product
@@ -48,22 +48,16 @@ async function analyzeBeers(producer, product) {
 
     const combined = producer && product ? `${producer} ${product}` : (product || producer);
 
-    // 1) Appels en parallèle sur la requête combinée
-    const [untappdData, vtubCombined] = await Promise.all([
+    // Appels en parallèle avec producer et product séparés
+    const [untappdData, vtubData] = await Promise.all([
         getUntappdData(producer, product),
-        fetchFromVeuxTuUneBiere(combined),
+        fetchFromVeuxTuUneBiere(producer, product),
     ]);
-
-    // 2) Fallback VtUB: si rien trouvé avec "producer + product", on essaie "product" seul (si dispo)
-    let vtubFinal = vtubCombined;
-    if (!vtubFinal && product) {
-        vtubFinal = await fetchFromVeuxTuUneBiere(product);
-    }
 
     return {
         input: { producer: producer || null, product: product || null },
         combined,
-        vtub: vtubFinal || null,
+        vtub: vtubData || null,
         untappd: untappdData || null,
     };
 }

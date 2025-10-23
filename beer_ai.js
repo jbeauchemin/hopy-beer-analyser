@@ -52,7 +52,7 @@ async function getBeers({ limit }) {
 }
 
 // Comparer les données
-function compareData(beer, vtub, untappd) {
+function compareData(beer, vtub, masoif, untappd) {
     const comparison = {
         beer_id: beer.id,
         query: {
@@ -68,6 +68,7 @@ function compareData(beer, vtub, untappd) {
         },
         found: {
             vtub: vtub ? '✓' : '✗',
+            masoif: masoif ? '✓' : '✗',
             untappd: untappd ? '✓' : '✗',
         },
         vtub_data: vtub ? {
@@ -77,6 +78,16 @@ function compareData(beer, vtub, untappd) {
             style: vtub.style,
             description: vtub.description ? `${vtub.description.substring(0, 80)}...` : null,
             image: vtub.image_url ? '✓' : '✗',
+        } : null,
+        masoif_data: masoif ? {
+            beer_name: masoif.beer_name,
+            brewery: masoif.brewery_name,
+            abv: masoif.abv,
+            style: masoif.style,
+            ibu: masoif.ibu,
+            format: masoif.format,
+            description: masoif.description ? `${masoif.description.substring(0, 80)}...` : null,
+            image: masoif.image_url ? '✓' : '✗',
         } : null,
         untappd_data: untappd ? {
             beer_name: untappd.beer_name,
@@ -88,36 +99,40 @@ function compareData(beer, vtub, untappd) {
             description: untappd.description ? `${untappd.description.substring(0, 80)}...` : null,
             image: untappd.image_url ? '✓' : '✗',
         } : null,
-        quality_score: calculateQualityScore(vtub, untappd),
+        quality_score: calculateQualityScore(vtub, masoif, untappd),
     };
 
     return comparison;
 }
 
 // Score de qualité (0-100)
-function calculateQualityScore(vtub, untappd) {
+function calculateQualityScore(vtub, masoif, untappd) {
     let score = 0;
 
-    // Trouvé sur au moins une source: +30
-    if (vtub || untappd) score += 30;
+    // Trouvé sur au moins une source: +20
+    if (vtub || masoif || untappd) score += 20;
 
-    // Trouvé sur les deux: +20
-    if (vtub && untappd) score += 20;
+    // Trouvé sur 2 sources: +15
+    const foundCount = [vtub, masoif, untappd].filter(Boolean).length;
+    if (foundCount === 2) score += 15;
+
+    // Trouvé sur les 3 sources: +25
+    if (foundCount === 3) score += 25;
 
     // ABV trouvé: +15
-    if (vtub?.abv || untappd?.beer_abv) score += 15;
+    if (vtub?.abv || masoif?.abv || untappd?.beer_abv) score += 15;
 
     // IBU trouvé: +10
-    if (untappd?.beer_ibu) score += 10;
+    if (masoif?.ibu || untappd?.beer_ibu) score += 10;
 
     // Rating trouvé: +10
     if (untappd?.rating_score) score += 10;
 
     // Description trouvée: +10
-    if (vtub?.description || untappd?.description) score += 10;
+    if (vtub?.description || masoif?.description || untappd?.description) score += 10;
 
     // Image trouvée: +5
-    if (vtub?.image_url || untappd?.image_url) score += 5;
+    if (vtub?.image_url || masoif?.image_url || untappd?.image_url) score += 5;
 
     return score;
 }
@@ -133,7 +148,7 @@ function printComparison(comp) {
     console.log(`   Description: ${comp.current_db.description} | Image: ${comp.current_db.imageUrl}`);
 
     console.log('\n🔍 RECHERCHE:');
-    console.log(`   VTUB: ${comp.found.vtub} | Untappd: ${comp.found.untappd}`);
+    console.log(`   VTUB: ${comp.found.vtub} | Masoif: ${comp.found.masoif} | Untappd: ${comp.found.untappd}`);
     console.log(`   Score qualité: ${comp.quality_score}/100`);
 
     if (comp.vtub_data) {
@@ -143,6 +158,16 @@ function printComparison(comp) {
         console.log(`   ABV: ${comp.vtub_data.abv || 'N/A'} | Style: ${comp.vtub_data.style || 'N/A'}`);
         console.log(`   Description: ${comp.vtub_data.description || 'N/A'}`);
         console.log(`   Image: ${comp.vtub_data.image}`);
+    }
+
+    if (comp.masoif_data) {
+        console.log('\n🍷 MASOIF:');
+        console.log(`   Nom: ${comp.masoif_data.beer_name}`);
+        console.log(`   Brasserie: ${comp.masoif_data.brewery || 'N/A'}`);
+        console.log(`   ABV: ${comp.masoif_data.abv || 'N/A'} | IBU: ${comp.masoif_data.ibu || 'N/A'} | Style: ${comp.masoif_data.style || 'N/A'}`);
+        console.log(`   Format: ${comp.masoif_data.format || 'N/A'}`);
+        console.log(`   Description: ${comp.masoif_data.description || 'N/A'}`);
+        console.log(`   Image: ${comp.masoif_data.image}`);
     }
 
     if (comp.untappd_data) {
@@ -155,7 +180,7 @@ function printComparison(comp) {
         console.log(`   Image: ${comp.untappd_data.image}`);
     }
 
-    if (!comp.vtub_data && !comp.untappd_data) {
+    if (!comp.vtub_data && !comp.masoif_data && !comp.untappd_data) {
         console.log('\n❌ AUCUNE DONNÉE TROUVÉE');
     }
 }
@@ -175,8 +200,9 @@ async function main() {
     const stats = {
         total: beers.length,
         vtub_found: 0,
+        masoif_found: 0,
         untappd_found: 0,
-        both_found: 0,
+        all_found: 0,
         none_found: 0,
         total_quality: 0,
     };
@@ -189,17 +215,18 @@ async function main() {
 
         try {
             // Recherche
-            const { vtub, untappd } = await analyzeBeers(producer, product);
+            const { vtub, masoif, untappd } = await analyzeBeers(producer, product);
 
             // Comparer
-            const comparison = compareData(beer, vtub, untappd);
+            const comparison = compareData(beer, vtub, masoif, untappd);
             results.push(comparison);
 
             // Stats
             if (vtub) stats.vtub_found++;
+            if (masoif) stats.masoif_found++;
             if (untappd) stats.untappd_found++;
-            if (vtub && untappd) stats.both_found++;
-            if (!vtub && !untappd) stats.none_found++;
+            if (vtub && masoif && untappd) stats.all_found++;
+            if (!vtub && !masoif && !untappd) stats.none_found++;
             stats.total_quality += comparison.quality_score;
 
             // Afficher
@@ -238,8 +265,9 @@ async function main() {
     console.log('='.repeat(80));
     console.log(`Total bières testées: ${stats.total}`);
     console.log(`VTUB trouvé: ${stats.vtub_found} (${Math.round(stats.vtub_found / stats.total * 100)}%)`);
+    console.log(`Masoif trouvé: ${stats.masoif_found} (${Math.round(stats.masoif_found / stats.total * 100)}%)`);
     console.log(`Untappd trouvé: ${stats.untappd_found} (${Math.round(stats.untappd_found / stats.total * 100)}%)`);
-    console.log(`Les deux trouvés: ${stats.both_found} (${Math.round(stats.both_found / stats.total * 100)}%)`);
+    console.log(`Les 3 trouvés: ${stats.all_found} (${Math.round(stats.all_found / stats.total * 100)}%)`);
     console.log(`Aucun trouvé: ${stats.none_found} (${Math.round(stats.none_found / stats.total * 100)}%)`);
     console.log(`Score qualité moyen: ${Math.round(stats.total_quality / stats.total)}/100`);
     console.log('='.repeat(80));

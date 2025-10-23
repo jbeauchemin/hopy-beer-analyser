@@ -17,8 +17,8 @@ const CONFIG = {
     MAX_REQUESTS: 50,
     RETRY_ATTEMPTS: 2,
     TIMEOUT_MS: 20000,
-    MIN_SCORE_THRESHOLD: 0.65, // 65% minimum pour accepter (augmenté de 55%)
-    MIN_PRODUCER_SCORE: 0.30, // 30% minimum pour le producer si fourni
+    MIN_SCORE_THRESHOLD: 0.70, // 70% minimum pour accepter (augmenté de 65%)
+    MIN_PRODUCER_SCORE: 0.40, // 40% minimum pour le producer si fourni (augmenté de 30%)
     PRODUCT_WEIGHT: 0.6,
     PRODUCER_WEIGHT: 0.4,
 };

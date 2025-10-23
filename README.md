@@ -94,7 +94,7 @@ npm run db:studio
 
 - `analyze_beers.js` - Point d'entrée principal pour analyser une bière
 - `beer_ai.js` - Outil de test de l'algorithme avec la base de données
-- `scapper/veuxtuunebiere_v2.js` - Scraper pour veuxtuunebiere.com (2-phase architecture)
+- `scapper/veuxtuunebiere.js` - Scraper pour veuxtuunebiere.com (2-phase architecture)
 - `scapper/untapped.js` - Scraper pour Untappd (Algolia API)
 - `scapper/duckduckgo.js` - Recherche DuckDuckGo avec Puppeteer
 - `prisma/schema.prisma` - Schema de base de données

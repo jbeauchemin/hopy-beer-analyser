@@ -1,5 +1,5 @@
 const { getUntappdData } = require('./scapper/untapped');
-const { fetchFromVeuxTuUneBiere } = require('./scapper/veuxtuunebiere_v2');
+const { fetchFromVeuxTuUneBiere } = require('./scapper/veuxtuunebiere');
 
 /** Parse args: supporte flags (--producer=, --product=) et positionnels ("Prod" "Beer") */
 function parseArgs(argv) {

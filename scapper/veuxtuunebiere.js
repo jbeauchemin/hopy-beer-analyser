@@ -1,9 +1,47 @@
-// api/veuxtuunebiere.js
+// ============================================================================
+// VeuxTuUneBiere Scraper v2 - Architecture 2 phases
+// ============================================================================
+// Phase 1: COLLECTE (permissive) - rassemble tous les candidats possibles
+// Phase 2: VALIDATION (stricte) - sélectionne le meilleur ou retourne null
+// ============================================================================
+
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { searchDuckDuckGo } = require('./duckduckgo'); // ← même import que chez toi
+const { searchDuckDuckGo } = require('./duckduckgo');
 
-/** Slug SEO-friendly */
+// ============================================================================
+// CONFIGURATION
+// ============================================================================
+
+const CONFIG = {
+    MAX_REQUESTS: 50,
+    RETRY_ATTEMPTS: 2,
+    TIMEOUT_MS: 20000,
+    MIN_SCORE_THRESHOLD: 0.55, // 55% minimum pour accepter (ajusté pour variations orthographiques)
+    PRODUCT_WEIGHT: 0.6,
+    PRODUCER_WEIGHT: 0.4,
+};
+
+let requestCounter = 0;
+const resultsCache = new Map();
+
+// ============================================================================
+// UTILITAIRES
+// ============================================================================
+
+function normalize(text) {
+    return (text || '')
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function tokenize(text) {
+    return normalize(text).split(' ').filter(t => t.length > 2);
+}
+
 function generateSlug(name) {
     return (name || '')
         .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -13,376 +51,418 @@ function generateSlug(name) {
         .toLowerCase();
 }
 
-/** Fallback queries en enlevant les mots de gauche */
-function generateQueryFallbacks(query) {
-    const words = (query || '').split(' ').filter(Boolean);
-    const fallbacks = [];
-    for (let i = 0; i < words.length; i++) {
-        const slice = words.slice(i).join(' ').trim();
-        if (slice.length >= 3) fallbacks.push(slice);
-    }
-    return fallbacks;
-}
-
-/** Construire des candidates de recherche (producer+product, puis product seul + fallbacks) */
-function buildSearchCandidates(producer, product) {
-    const list = [];
-    const p = (producer || '').trim();
-    const b = (product || '').trim();
-
-    if (p && b) {
-        list.push(`${p} ${b}`);   // requête la plus informative
-        list.push(b);             // produit seul
-    } else {
-        list.push(b || p);
-    }
-    if (b) list.push(...generateQueryFallbacks(b));
-
-    // dédoublonne
-    const seen = new Set();
-    return list.filter((q) => {
-        const k = q.toLowerCase();
-        if (!k || seen.has(k)) return false;
-        seen.add(k);
-        return true;
-    });
-}
-
-/** User-Agent random + headers réalistes */
 function getRandomUserAgent() {
     const uas = [
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/117.0',
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15',
     ];
     return uas[Math.floor(Math.random() * uas.length)];
 }
-function getRealisticHeaders(referrer = null) {
-    return {
-        'User-Agent': getRandomUserAgent(),
-        'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Cache-Control': 'max-age=0',
-        'Referer': referrer || 'https://duckduckgo.com/',
-        'DNT': '1',
-        'Upgrade-Insecure-Requests': '1',
-        'Connection': 'keep-alive',
-    };
-}
 
-/** Limiteur très simple */
-let requestCounter = 0;
-const MAX_REQUESTS_PER_SESSION = 50; // Augmenté pour permettre de tester lessep-sans-alcool
-
-/** GET avec retries */
-async function fetchWithRetry(url, maxRetries = 2, referrer = null) { // Réduit de 3 à 2 pour économiser requêtes
-    if (requestCounter >= MAX_REQUESTS_PER_SESSION) {
-        console.warn('⚠️ Limite de requêtes atteinte pour cette session');
+async function fetchWithRetry(url, maxRetries = CONFIG.RETRY_ATTEMPTS) {
+    if (requestCounter >= CONFIG.MAX_REQUESTS) {
         return null;
     }
+
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
-            console.log(`🌐 GET ${url}${attempt ? ` (tentative ${attempt + 1}/${maxRetries})` : ''}`);
             requestCounter++;
-            const res = await axios.get(url, {
-                headers: getRealisticHeaders(referrer),
-                timeout: 20000,
-                maxRedirects: 5,
+
+            // Petit délai pour éviter le rate limiting
+            await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 200));
+
+            const { data } = await axios.get(url, {
+                headers: {
+                    'User-Agent': getRandomUserAgent(),
+                    'Accept-Language': 'fr-FR,fr;q=0.9',
+                },
+                timeout: CONFIG.TIMEOUT_MS,
             });
-            return res.data;
+            return data;
         } catch (error) {
-            if (attempt === maxRetries - 1) {
-                console.error(`❌ Échec après ${maxRetries} tentatives pour ${url}`);
-                return null;
-            }
+            if (attempt === maxRetries - 1) return null;
+            await new Promise(resolve => setTimeout(resolve, 500)); // Délai avant retry
         }
     }
     return null;
 }
 
-/** Parser d’une page produit VTUB */
-function parseBeerPage($, fallbackName, source = 'veuxtuunebiere.com') {
-    try {
-        const metaDescription = $('meta[name="description"]').attr('content');
-        if (!metaDescription) {
-            console.warn('⚠️ Pas de meta description trouvée');
-            return null;
-        }
+// ============================================================================
+// PARSING HTML
+// ============================================================================
 
-        // image: og:image:secure_url puis og:image en fallback
-        const ogSecure = $('meta[property="og:image:secure_url"]').attr('content');
-        const ogImage = $('meta[property="og:image"]').attr('content');
-        const image_url = (ogSecure || ogImage || '')
-            .replace(/^\/\//, 'https://') || null;
-
-        const description = metaDescription
-            .replace(/&#39;/g, "'")
-            .replace(/&ndash;/g, '–')
-            .trim() || null;
-
-        let abv = null, style = null, subStyle = null, producer = null, volume = null;
-
-        $('#wrapper-details li').each((_, el) => {
-            const label = $(el).find('span').first().text().trim().toLowerCase();
-            const rawValue =
-                $(el).find('a').text().trim() || $(el).find('span').last().text().trim();
-
-            if (label.includes('alcool')) {
-                abv = parseFloat(
-                    rawValue.replace('%', '').replace(',', '.')
-                ) || null;
-            }
-            if (label.includes('style') && !label.includes('sous')) style = rawValue?.trim() || null;
-            if (label.includes('sous-style')) subStyle = rawValue?.trim() || null;
-            if (label.includes('producteur'))
-                producer = rawValue.replace(/^Producteur\s*/i, '').trim();
-            if (label.includes('volume')) {
-                const match = rawValue.match(/([0-9]+)\s*ml/i);
-                if (match) volume = parseInt(match[1], 10);
-            }
-        });
-
-        // ABV aussi via la description (ex: "4%" ou "4,5%")
-        if (!abv && description) {
-            const abvMatch = description.match(/(\d+(?:[,.]\d+)?)\s*%/);
-            if (abvMatch) abv = parseFloat(abvMatch[1].replace(',', '.'));
-        }
-
-        const result = {
-            source,
-            beer_name: $('h1.product-single__title').text().trim() || fallbackName,
-            brewery_name: producer || null,
-            type_name: subStyle || null,
-            style: style || null,
-            abv,
-            volume_ml: volume,
-            description,
-            image_url,
-        };
-
-        console.log(`✅ Informations extraites pour "${result.beer_name}"`);
-        return result;
-    } catch (error) {
-        console.error('❌ Erreur lors du parsing de la page:', error.message);
-        return null;
-    }
-}
-
-/** Essayer de parser une URL VTUB */
-async function tryParseProductUrl(url, fallbackName, sourceLabel) {
+async function parseProductPage(url) {
     const html = await fetchWithRetry(url);
     if (!html) return null;
+
     const $ = cheerio.load(html);
+
+    // Vérifier que c'est une page produit valide
     if ($('h1.product-single__title').length === 0) {
-        console.log('❌ Page non reconnue comme page produit');
         return null;
     }
-    return parseBeerPage($, fallbackName, sourceLabel);
-}
 
-/** Validation stricte du résultat pour éviter les faux positifs */
-function validateBeerMatch(beerResult, product) {
-    if (!beerResult || !product) return true; // Si pas de contrainte, accepter
+    const beer_name = $('h1.product-single__title').text().trim();
+    if (!beer_name) return null;
 
-    const normalize = (s) => (s || '')
-        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
+    // Extraire les infos
+    let brewery_name = null;
+    let abv = null;
+    let volume_ml = null;
+    let style = null;
+    let subStyle = null;
 
-    const beerName = normalize(beerResult.beer_name || '');
-    const searchProduct = normalize(product);
+    $('#wrapper-details li').each((_, el) => {
+        const label = $(el).find('span').first().text().trim().toLowerCase();
+        const value = $(el).find('a').text().trim() || $(el).find('span').last().text().trim();
 
-    // Tokenizer
-    const tokens = (s) => s.split(' ').filter(t => t.length > 2);
-    const beerTokens = new Set(tokens(beerName));
-    const productTokens = tokens(searchProduct);
-
-    // Compter combien de tokens du produit sont dans le nom de la bière
-    let matches = 0;
-    for (const token of productTokens) {
-        if (beerTokens.has(token)) matches++;
-    }
-
-    // Ratio de correspondance (au moins 60% des tokens doivent matcher)
-    const ratio = productTokens.length > 0 ? matches / productTokens.length : 1;
-
-    if (ratio < 0.6) {
-        console.log(`⚠️ Validation échouée: "${beerResult.beer_name}" ne correspond pas à "${product}" (${Math.round(ratio * 100)}% match)`);
-        return false;
-    }
-
-    console.log(`✅ Validation réussie: "${beerResult.beer_name}" (${Math.round(ratio * 100)}% match)`);
-    return true;
-}
-
-/** 🔎 Recherche DuckDuckGo (prioritaire) — avec opts producer/product */
-async function fetchViaDuckDuckGo(producer, product, query) {
-    console.log(`🔁 Recherche DuckDuckGo pour "${query}" (site: veuxtuunebiere.com)`);
-    try {
-        const duckUrl = await searchDuckDuckGo(
-            query,
-            'veuxtuunebiere.com',
-            '/products/',
-            { producer, product } // ← passe le contexte pour validation stricte
-        );
-        if (!duckUrl) {
-            console.log('❌ Aucune URL trouvée via DuckDuckGo');
-            return null;
+        if (label.includes('producteur')) {
+            brewery_name = value.replace(/^Producteur\s*/i, '').trim();
+        } else if (label.includes('alcool')) {
+            abv = parseFloat(value.replace('%', '').replace(',', '.')) || null;
+        } else if (label.includes('style') && !label.includes('sous')) {
+            style = value;
+        } else if (label.includes('sous-style')) {
+            subStyle = value;
+        } else if (label.includes('volume')) {
+            const match = value.match(/([0-9]+)\s*ml/i);
+            if (match) volume_ml = parseInt(match[1], 10);
         }
-        if (duckUrl.includes('/products/')) {
-            const result = await tryParseProductUrl(
-                duckUrl,
-                query,
-                'veuxtuunebiere.com (via DuckDuckGo)'
-            );
+    });
 
-            // VALIDATION STRICTE : rejeter si ne correspond pas au produit
-            if (result && !validateBeerMatch(result, product)) {
-                return null; // Rejeter ce résultat → passera au fallback slugs
+    const description = $('meta[name="description"]').attr('content') || null;
+    const ogImage = $('meta[property="og:image:secure_url"]').attr('content')
+                 || $('meta[property="og:image"]').attr('content');
+    const image_url = ogImage ? ogImage.replace(/^\/\//, 'https://') : null;
+
+    return {
+        url,
+        beer_name,
+        brewery_name,
+        type_name: subStyle,
+        style,
+        abv,
+        volume_ml,
+        description,
+        image_url,
+        source: 'veuxtuunebiere.com',
+    };
+}
+
+// ============================================================================
+// PHASE 1: COLLECTE (PERMISSIVE)
+// ============================================================================
+
+function generateSlugCandidates(product) {
+    const slugs = [];
+    const base = generateSlug(product);
+
+    // Variation base + sans 's' final
+    const variations = [base];
+    if (base.endsWith('s')) {
+        variations.push(base.slice(0, -1));
+    }
+
+    // Pour chaque variation : base, base-1, base-2, base-sans-alcool
+    for (const slug of variations) {
+        slugs.push(slug);
+        for (let i = 1; i <= 2; i++) {
+            slugs.push(`${slug}-${i}`);
+        }
+        slugs.push(`${slug}-sans-alcool`);
+    }
+
+    return [...new Set(slugs)]; // Dédupliquer
+}
+
+async function collectCandidatesFromSlugs(product) {
+    console.log('🔍 Collecte via slugs...');
+    const candidates = [];
+    const MAX_CANDIDATES = 5; // Limite pour éviter trop de requêtes
+
+    // Générer des requêtes de fallback (ex: "IPA de Lesseps" → ["Lesseps", "de Lesseps", "IPA de Lesseps"])
+    const words = (product || '').split(' ').filter(Boolean);
+    const queryVariants = [];
+
+    // Tester les mots de droite à gauche (Lesseps avant IPA de Lesseps)
+    for (let i = words.length - 1; i >= 0; i--) {
+        const slice = words.slice(i).join(' ').trim();
+        if (slice.length >= 3) queryVariants.push(slice);
+    }
+
+    // Pour chaque variant, générer les slugs
+    outerLoop: for (const variant of queryVariants) {
+        const slugs = generateSlugCandidates(variant);
+
+        for (const slug of slugs) {
+            if (candidates.length >= MAX_CANDIDATES) {
+                console.log(`  ⏹️  Arrêt après ${MAX_CANDIDATES} candidats trouvés`);
+                break outerLoop;
             }
 
-            return result;
+            const url = `https://veuxtuunebiere.com/products/${slug}`;
+            const parsed = await parseProductPage(url);
+            if (parsed) {
+                console.log(`  ✓ Trouvé: ${parsed.beer_name} (${slug})`);
+                candidates.push(parsed);
+            }
         }
-        console.log('❌ URL non-produit détectée via DuckDuckGo');
+    }
+
+    return candidates;
+}
+
+async function collectCandidatesFromDuckDuckGo(producer, product, query) {
+    console.log(`🔍 Collecte via DuckDuckGo: "${query}"`);
+
+    try {
+        const url = await searchDuckDuckGo(query, 'veuxtuunebiere.com', '/products/', { producer, product });
+        if (!url || !url.includes('/products/')) {
+            return [];
+        }
+
+        const parsed = await parseProductPage(url);
+        if (parsed) {
+            console.log(`  ✓ Trouvé: ${parsed.beer_name}`);
+            return [parsed];
+        }
+    } catch (error) {
+        console.log(`  ✗ Erreur DuckDuckGo: ${error.message}`);
+    }
+
+    return [];
+}
+
+async function collectAllCandidates(producer, product) {
+    const allCandidates = [];
+
+    // 1. DuckDuckGo avec plusieurs queries
+    const queries = [
+        product,
+        producer && product ? `${producer} ${product}` : null,
+    ].filter(Boolean);
+
+    for (const query of queries) {
+        const candidates = await collectCandidatesFromDuckDuckGo(producer, product, query);
+        allCandidates.push(...candidates);
+    }
+
+    // 2. Slug enumeration (seulement si < 3 candidats)
+    if (allCandidates.length < 3) {
+        const slugCandidates = await collectCandidatesFromSlugs(product);
+        allCandidates.push(...slugCandidates);
+    }
+
+    // Déduplication par URL
+    const seen = new Set();
+    const unique = [];
+    for (const candidate of allCandidates) {
+        if (!seen.has(candidate.url)) {
+            seen.add(candidate.url);
+            unique.push(candidate);
+        }
+    }
+
+    console.log(`\n📋 Total candidats collectés: ${unique.length}`);
+    return unique;
+}
+
+// ============================================================================
+// PHASE 2: VALIDATION & SCORING (STRICTE)
+// ============================================================================
+
+function calculateTokenOverlap(text1, text2) {
+    if (!text1 || !text2) return 0;
+
+    const tokens1 = tokenize(text1);
+    const tokens2 = tokenize(text2);
+
+    if (tokens2.length === 0) return 0;
+
+    let totalScore = 0;
+    for (const token2 of tokens2) {
+        let bestMatch = 0;
+
+        for (const token1 of tokens1) {
+            // Match exact
+            if (token1 === token2) {
+                bestMatch = 1.0;
+                break;
+            }
+
+            // Match avec pluriel (lessep vs lesseps)
+            const t1 = token1.replace(/s$/, '');
+            const t2 = token2.replace(/s$/, '');
+            if (t1 === t2 && t1.length >= 3) {
+                bestMatch = Math.max(bestMatch, 0.95);
+                continue;
+            }
+
+            // Match substring (lessep contenu dans lesseps ou vice-versa)
+            if (token1.length >= 4 && token2.length >= 4) {
+                if (token1.includes(token2) || token2.includes(token1)) {
+                    const ratio = Math.min(token1.length, token2.length) / Math.max(token1.length, token2.length);
+                    bestMatch = Math.max(bestMatch, 0.85 * ratio);
+                }
+            }
+        }
+
+        totalScore += bestMatch;
+    }
+
+    return totalScore / tokens2.length;
+}
+
+function scoreCandidate(candidate, producer, product) {
+    // Score produit (60%)
+    const productScore = calculateTokenOverlap(candidate.beer_name, product);
+
+    // Score producteur (40%)
+    let producerScore = 0;
+    if (producer && candidate.brewery_name) {
+        producerScore = calculateTokenOverlap(candidate.brewery_name, producer);
+    } else if (!producer) {
+        producerScore = 1; // Si pas de contrainte producteur, on accepte
+    }
+
+    const finalScore = (productScore * CONFIG.PRODUCT_WEIGHT) + (producerScore * CONFIG.PRODUCER_WEIGHT);
+
+    return {
+        total: finalScore,
+        product: productScore,
+        producer: producerScore,
+    };
+}
+
+function selectBestCandidate(candidates, producer, product) {
+    if (!candidates || candidates.length === 0) {
+        console.log('\n❌ Aucun candidat à évaluer');
         return null;
-    } catch (err) {
-        console.error('❌ Erreur recherche DuckDuckGo:', err.message);
+    }
+
+    console.log('\n📊 Scoring des candidats:');
+
+    const scored = candidates.map(candidate => {
+        const scores = scoreCandidate(candidate, producer, product);
+        return {
+            ...candidate,
+            score: scores.total,
+            scoreDetails: scores,
+        };
+    });
+
+    // Trier par score décroissant
+    scored.sort((a, b) => b.score - a.score);
+
+    // Afficher le top 3
+    scored.slice(0, 3).forEach((c, i) => {
+        console.log(`  ${i + 1}. ${c.beer_name} (${c.brewery_name || 'N/A'})`);
+        console.log(`     Score: ${(c.score * 100).toFixed(0)}% (produit: ${(c.scoreDetails.product * 100).toFixed(0)}%, producteur: ${(c.scoreDetails.producer * 100).toFixed(0)}%)`);
+    });
+
+    const best = scored[0];
+
+    if (best.score >= CONFIG.MIN_SCORE_THRESHOLD) {
+        console.log(`\n✅ Meilleur candidat sélectionné: "${best.beer_name}" (${(best.score * 100).toFixed(0)}%)`);
+        // Retirer les champs de scoring avant de retourner
+        const { score, scoreDetails, ...result } = best;
+        return result;
+    } else {
+        console.log(`\n⚠️ Meilleur score: ${(best.score * 100).toFixed(0)}% < ${(CONFIG.MIN_SCORE_THRESHOLD * 100).toFixed(0)}% (seuil)`);
+        console.log(`   → Retourne null (préfère pas de données que de mauvaises données)`);
         return null;
     }
 }
 
-/** Cache local pour éviter de refaire les mêmes requêtes */
-const resultsCache = new Map();
+// ============================================================================
+// API PRINCIPALE
+// ============================================================================
 
-/**
- * 💡 API principale
- * - Appel flexible:
- *   fetchFromVeuxTuUneBiere("Camerise")
- *   fetchFromVeuxTuUneBiere("Menaud", "Camerise")
- * Flow:
- *   1) DuckDuckGo d’abord (producer+product puis product)
- *   2) Fallback enumeration de slugs si rien trouvé
- */
 async function fetchFromVeuxTuUneBiere(arg1, arg2) {
-    // Résoudre inputs
+    // Parse arguments
     let producer = null;
     let product = null;
+
     if (typeof arg2 === 'string') {
         producer = (arg1 || '').trim();
         product = (arg2 || '').trim();
     } else {
         product = (arg1 || '').trim();
     }
-    const cacheKey = `${(producer || '').toLowerCase()}|${(product || '').toLowerCase().trim()}`;
+
+    if (!product) {
+        console.error('❌ Produit requis');
+        return null;
+    }
 
     // Cache
+    const cacheKey = `${(producer || '').toLowerCase()}|${product.toLowerCase()}`;
     if (resultsCache.has(cacheKey)) {
-        console.log(`🔄 Résultat trouvé en cache pour "${producer ? producer + ' ' : ''}${product}"`);
+        console.log(`🔄 Résultat en cache`);
         return resultsCache.get(cacheKey);
     }
 
-    // Réinitialiser compteur si trop élevé
-    if (requestCounter >= MAX_REQUESTS_PER_SESSION) {
-        console.warn('⚠️ Réinitialisation du compteur de requêtes');
+    // Reset counter si nécessaire
+    if (requestCounter >= CONFIG.MAX_REQUESTS) {
+        console.log('⚠️ Reset compteur requêtes');
         requestCounter = 0;
     }
 
-    // 1) 🔎 Recherche DuckDuckGo en priorité (candidats : "producer product", "product", fallbacks)
-    const candidates = buildSearchCandidates(producer, product);
-    let result = null;
-    for (const q of candidates) {
-        result = await fetchViaDuckDuckGo(producer, product, q);
-        if (result) break;
-    }
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`🔎 Recherche: "${producer || '(aucun)'}" - "${product}"`);
+    console.log('='.repeat(60));
 
-    // 2) 🧩 Fallback slugs (si rien trouvé via Duck)
-    if (!result) {
-        console.log('🔄 Aucun résultat via DuckDuckGo — fallback sur slugs');
-        // on énumère uniquement sur le produit (plus stable pour slugs)
-        const baseList = generateQueryFallbacks(product || producer || '');
-        // INVERSION : tester les queries courtes EN PREMIER (Lesseps avant Pit Caribou IPA de Lesseps)
-        baseList.reverse();
+    try {
+        // PHASE 1: COLLECTE
+        console.log('\n📦 PHASE 1: COLLECTE DES CANDIDATS');
+        const candidates = await collectAllCandidates(producer, product);
 
-        for (const query of baseList) {
-            if (result) break;
-            const baseSlug = generateSlug(query);
+        // PHASE 2: VALIDATION & SCORING
+        console.log('\n🎯 PHASE 2: VALIDATION & SCORING');
+        const result = selectBestCandidate(candidates, producer, product);
 
-            // Ajouter variation sans 's' final (lesseps → lessep)
-            const slugVariants = [baseSlug];
-            if (baseSlug.endsWith('s')) {
-                slugVariants.push(baseSlug.slice(0, -1));
-            }
-
-            console.log(`🔍 Essai slug de base: "${baseSlug}"`);
-
-            for (const slug of slugVariants) {
-                if (result) break;
-                // Tester: slug, slug-sans-alcool, slug-1, slug-2, slug-3
-                for (let i = 0; i <= 3; i++) {
-                    if (result) break;
-                    const finalSlug = i === 0 ? slug : `${slug}-${i}`;
-                    const url = `https://veuxtuunebiere.com/products/${finalSlug}`;
-                    console.log(`🔍 Tentative: ${url}`);
-                    result = await tryParseProductUrl(url, query);
-                    if (result) {
-                        console.log(`✅ Correspondance trouvée avec slug "${finalSlug}"`);
-                        break;
-                    }
-                }
-                // Tester aussi avec -sans-alcool
-                if (!result) {
-                    const url = `https://veuxtuunebiere.com/products/${slug}-sans-alcool`;
-                    console.log(`🔍 Tentative: ${url}`);
-                    result = await tryParseProductUrl(url, query);
-                    if (result) {
-                        console.log(`✅ Correspondance trouvée avec slug "${slug}-sans-alcool"`);
-                        break;
-                    }
-                }
-            }
+        // Cache le résultat
+        if (result) {
+            resultsCache.set(cacheKey, result);
         }
-    }
 
-    // 3) Cache & retour
-    if (result) {
-        resultsCache.set(cacheKey, result);
-    } else {
-        console.error(`❌ Aucune donnée trouvée pour "${producer ? producer + ' ' : ''}${product}"`);
-    }
+        console.log('='.repeat(60) + '\n');
+        return result;
 
-    return result;
+    } catch (error) {
+        console.error(`❌ Erreur: ${error.message}`);
+        return null;
+    }
 }
 
-// Nettoyage
-process.on('SIGINT', () => {
-    console.log('🧹 Nettoyage avant sortie...');
-    process.exit(0);
-});
-process.on('unhandledRejection', (reason) => {
-    console.error('❌ Promesse non gérée:', reason);
-});
+// ============================================================================
+// EXPORTS
+// ============================================================================
 
 module.exports = { fetchFromVeuxTuUneBiere };
 
-/** CLI locale */
+// CLI pour tests
 if (require.main === module) {
     const args = process.argv.slice(2);
-    let res;
-    const run = async () => {
+    if (args.length === 0) {
+        console.log('Usage: node veuxtuunebiere_v2.js "Product"');
+        console.log('   ou: node veuxtuunebiere_v2.js "Producer" "Product"');
+        process.exit(1);
+    }
+
+    (async () => {
+        let result;
         if (args.length >= 2) {
-            res = await fetchFromVeuxTuUneBiere(args[0], args.slice(1).join(' '));
-        } else if (args.length === 1) {
-            res = await fetchFromVeuxTuUneBiere(args[0]);
+            result = await fetchFromVeuxTuUneBiere(args[0], args.slice(1).join(' '));
         } else {
-            console.log('Usage: node api/veuxtuunebiere.js "Product"');
-            console.log('   ou: node api/veuxtuunebiere.js "Producer" "Product"');
-            process.exit(1);
+            result = await fetchFromVeuxTuUneBiere(args[0]);
         }
-        if (res) console.log(JSON.stringify(res, null, 2));
-        else process.exit(1);
-    };
-    run();
+
+        if (result) {
+            console.log('\n📄 RÉSULTAT:');
+            console.log(JSON.stringify(result, null, 2));
+        } else {
+            console.log('\n❌ Aucun résultat trouvé');
+        }
+    })();
 }

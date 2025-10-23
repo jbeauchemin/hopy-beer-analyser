@@ -58,11 +58,16 @@ class ProgressBar {
         }
         this.lastUpdateTime = now;
 
-        // Clear previous lines
+        // Clear previous lines (only if we've rendered before)
         if (this.lastLineCount > 0) {
-            for (let i = 0; i < this.lastLineCount; i++) {
-                readline.moveCursor(process.stdout, 0, -1);
-                readline.clearLine(process.stdout, 0);
+            try {
+                for (let i = 0; i < this.lastLineCount; i++) {
+                    readline.moveCursor(process.stdout, 0, -1);
+                    readline.clearLine(process.stdout, 0);
+                }
+            } catch (err) {
+                // If readline fails, just print a newline separator
+                process.stdout.write('\n' + '─'.repeat(60) + '\n');
             }
         }
 

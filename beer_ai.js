@@ -348,11 +348,17 @@ async function main() {
     // Create progress bar
     const progressBar = !args.json ? new ProgressBar(beers.length, { workers: workerCount }) : null;
     if (progressBar) {
+        if (!args.json) {
+            process.stdout.write('🚀 Démarrage du traitement...\n');
+        }
         progressBar.start();
     }
 
     // Traitement parallèle ou séquentiel
     if (workerCount > 1) {
+        if (!args.json) {
+            process.stdout.write(`⚡ Lancement de ${workerCount} workers...\n\n`);
+        }
         results = await processBeersInParallel(beers, workerCount, stats, !args.json, progressBar);
     } else {
         // Traitement séquentiel avec barre de progression

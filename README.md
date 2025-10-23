@@ -49,6 +49,11 @@ node analyze_beers.js --product="IPA de Lesseps"
 
 # Format positionnel
 node analyze_beers.js "Pit Caribou" "IPA de Lesseps"
+
+# Sauvegarder les résultats en JSON
+node analyze_beers.js --producer="Pit Caribou" --product="IPA de Lesseps" --save
+# ou
+node analyze_beers.js --producer="Pit Caribou" --product="IPA de Lesseps" --json
 ```
 
 ### Tester l'algorithme avec la base de données
@@ -111,6 +116,7 @@ npm run db:studio
 - `scapper/untapped.js` - Scraper pour Untappd (Algolia API)
 - `scapper/duckduckgo.js` - Recherche DuckDuckGo avec Puppeteer
 - `prisma/schema.prisma` - Schema de base de données
+- `results/` - Dossier contenant les résultats JSON sauvegardés
 
 ## Exemple de Résultat
 
@@ -155,6 +161,40 @@ npm run db:studio
     beer_abv: 4,
     beer_ibu: 15,
     rating_score: 3.83
+  }
+}
+```
+
+## Sauvegarde des Résultats
+
+Les résultats peuvent être sauvegardés en JSON avec le flag `--save` ou `--json`:
+
+```bash
+node analyze_beers.js --producer="Messorem" --product="Naufragé Oublié" --save
+```
+
+Les fichiers sont sauvegardés dans `results/` avec le format:
+- Nom: `YYYY-MM-DDTHH-MM-SS_producer-product.json`
+- Contenu: Query, résultats de chaque source, et résumé
+
+Exemple de structure JSON:
+```json
+{
+  "timestamp": "2025-01-23T14:30:45.123Z",
+  "query": {
+    "producer": "Messorem",
+    "product": "Naufragé Oublié",
+    "combined": "Messorem Naufragé Oublié"
+  },
+  "results": {
+    "veuxtuunebiere": { ... },
+    "masoif": { ... },
+    "espacehoublon": { ... },
+    "untappd": { ... }
+  },
+  "summary": {
+    "sources_found": ["veuxtuunebiere", "espacehoublon", "untappd"],
+    "total_sources": 3
   }
 }
 ```

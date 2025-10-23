@@ -2,11 +2,14 @@ const { getUntappdData } = require('./scapper/untapped');
 const { fetchFromVeuxTuUneBiere } = require('./scapper/veuxtuunebiere');
 const { fetchFromMasoif } = require('./scapper/masoif');
 const { fetchFromEspaceHoublon } = require('./scapper/espacehoublon');
+const fs = require('fs');
+const path = require('path');
 
-/** Parse args: supporte flags (--producer=, --product=) et positionnels ("Prod" "Beer") */
+/** Parse args: supporte flags (--producer=, --product=, --save) et positionnels ("Prod" "Beer") */
 function parseArgs(argv) {
     let producer = null;
     let product = null;
+    let save = false;
 
     // Flags explicites
     for (const a of argv.slice(2)) {
@@ -14,6 +17,8 @@ function parseArgs(argv) {
             producer = a.slice('--producer='.length).trim().replace(/^"|"$/g, '');
         } else if (a.startsWith('--product=')) {
             product = a.slice('--product='.length).trim().replace(/^"|"$/g, '');
+        } else if (a === '--save' || a === '--json') {
+            save = true;
         }
     }
 
@@ -30,7 +35,7 @@ function parseArgs(argv) {
     if (producer === '') producer = null;
     if (product === '') product = null;
 
-    return { producer, product };
+    return { producer, product, save };
 }
 
 /**
@@ -68,19 +73,98 @@ async function analyzeBeers(producer, product) {
     };
 }
 
+/**
+ * Génère un nom de fichier pour la sauvegarde JSON
+ * @param {string|null} producer
+ * @param {string|null} product
+ * @returns {string}
+ */
+function generateFilename(producer, product) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5); // 2025-01-15T14-30-45
+
+    // Créer un slug du nom
+    const slug = (producer && product)
+        ? `${producer}-${product}`
+        : (product || producer || 'query');
+
+    const cleanSlug = slug
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '') // Enlever accents
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '')
+        .substring(0, 50); // Limiter la longueur
+
+    return `${timestamp}_${cleanSlug}.json`;
+}
+
+/**
+ * Sauvegarde les résultats dans un fichier JSON
+ * @param {object} result
+ * @param {string|null} producer
+ * @param {string|null} product
+ * @returns {string} Le chemin du fichier sauvegardé
+ */
+function saveResults(result, producer, product) {
+    const resultsDir = path.join(__dirname, 'results');
+
+    // Créer le dossier results/ s'il n'existe pas
+    if (!fs.existsSync(resultsDir)) {
+        fs.mkdirSync(resultsDir, { recursive: true });
+    }
+
+    const filename = generateFilename(producer, product);
+    const filepath = path.join(resultsDir, filename);
+
+    // Ajouter metadata
+    const output = {
+        timestamp: new Date().toISOString(),
+        query: {
+            producer: producer || null,
+            product: product || null,
+            combined: result.combined,
+        },
+        results: {
+            veuxtuunebiere: result.vtub || null,
+            masoif: result.masoif || null,
+            espacehoublon: result.espacehoublon || null,
+            untappd: result.untappd || null,
+        },
+        summary: {
+            sources_found: [
+                result.vtub ? 'veuxtuunebiere' : null,
+                result.masoif ? 'masoif' : null,
+                result.espacehoublon ? 'espacehoublon' : null,
+                result.untappd ? 'untappd' : null,
+            ].filter(Boolean),
+            total_sources: [result.vtub, result.masoif, result.espacehoublon, result.untappd].filter(Boolean).length,
+        }
+    };
+
+    fs.writeFileSync(filepath, JSON.stringify(output, null, 2), 'utf-8');
+
+    return filepath;
+}
+
 // === Export pour usage depuis un autre fichier ===
-module.exports = { analyzeBeers, parseArgs };
+module.exports = { analyzeBeers, parseArgs, saveResults };
 
 // === Mode CLI pour tests rapides ===
 if (require.main === module) {
     (async () => {
-        const { producer, product } = parseArgs(process.argv);
+        const { producer, product, save } = parseArgs(process.argv);
 
         if (!producer && !product) {
             console.log('Usage:');
             console.log('  node analyze_beers.js --producer="Menaud" --product="SMASH"');
             console.log('  node analyze_beers.js "Menaud" "SMASH"');
             console.log('  node analyze_beers.js --product="SMASH"');
+            console.log('  node analyze_beers.js --producer="Menaud" --product="SMASH" --save');
+            console.log('');
+            console.log('Options:');
+            console.log('  --save, --json    Sauvegarder les résultats dans results/');
             process.exit(1);
         }
 
@@ -89,6 +173,7 @@ if (require.main === module) {
         console.log('🔎 Requête combinée:', JSON.stringify(combined));
         if (product && producer) console.log('  • Producer =', JSON.stringify(producer));
         if (product) console.log('  • Product  =', JSON.stringify(product));
+        if (save) console.log('  • Sauvegarde: activée');
 
         try {
             const result = await analyzeBeers(producer, product);
@@ -104,6 +189,12 @@ if (require.main === module) {
 
             console.log('\n--- Untappd ---');
             console.log(result.untappd);
+
+            // Sauvegarder si demandé
+            if (save) {
+                const filepath = saveResults(result, producer, product);
+                console.log('\n💾 Résultats sauvegardés:', filepath);
+            }
 
             process.exit(0);
         } catch (error) {

@@ -17,7 +17,8 @@ const CONFIG = {
     MAX_REQUESTS: 50,
     RETRY_ATTEMPTS: 2,
     TIMEOUT_MS: 20000,
-    MIN_SCORE_THRESHOLD: 0.55, // 55% minimum pour accepter
+    MIN_SCORE_THRESHOLD: 0.65, // 65% minimum pour accepter (augmenté de 55%)
+    MIN_PRODUCER_SCORE: 0.30, // 30% minimum pour le producer si fourni
     PRODUCT_WEIGHT: 0.6,
     PRODUCER_WEIGHT: 0.4,
 };
@@ -473,15 +474,24 @@ function selectBestCandidate(candidates, producer, product) {
 
     const best = scored[0];
 
-    if (best.score >= CONFIG.MIN_SCORE_THRESHOLD) {
-        console.log(`\n✅ Meilleur candidat sélectionné: "${best.beer_name}" (${(best.score * 100).toFixed(0)}%)`);
-        const { score, scoreDetails, ...result } = best;
-        return result;
-    } else {
+    // Vérification du score total
+    if (best.score < CONFIG.MIN_SCORE_THRESHOLD) {
         console.log(`\n⚠️ Meilleur score: ${(best.score * 100).toFixed(0)}% < ${(CONFIG.MIN_SCORE_THRESHOLD * 100).toFixed(0)}% (seuil)`);
         console.log(`   → Retourne null (préfère pas de données que de mauvaises données)`);
         return null;
     }
+
+    // Vérification stricte du producer si fourni
+    if (producer && best.scoreDetails.producer < CONFIG.MIN_PRODUCER_SCORE) {
+        console.log(`\n⚠️ Score producteur trop faible: ${(best.scoreDetails.producer * 100).toFixed(0)}% < ${(CONFIG.MIN_PRODUCER_SCORE * 100).toFixed(0)}% (seuil)`);
+        console.log(`   → Producteur attendu: "${producer}", trouvé: "${best.brewery_name || 'N/A'}"`);
+        console.log(`   → Retourne null (le producteur ne correspond pas assez)`);
+        return null;
+    }
+
+    console.log(`\n✅ Meilleur candidat sélectionné: "${best.beer_name}" (${(best.score * 100).toFixed(0)}%)`);
+    const { score, scoreDetails, ...result } = best;
+    return result;
 }
 
 // ============================================================================

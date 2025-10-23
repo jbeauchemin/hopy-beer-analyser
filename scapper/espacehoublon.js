@@ -17,7 +17,8 @@ const CONFIG = {
     MAX_REQUESTS: 50,
     RETRY_ATTEMPTS: 2,
     TIMEOUT_MS: 20000,
-    MIN_SCORE_THRESHOLD: 0.55, // 55% minimum pour accepter
+    MIN_SCORE_THRESHOLD: 0.65, // 65% minimum pour accepter (augmenté de 55%)
+    MIN_PRODUCER_SCORE: 0.30, // 30% minimum pour le producer si fourni
     PRODUCT_WEIGHT: 0.6,
     PRODUCER_WEIGHT: 0.4,
 };
@@ -157,8 +158,27 @@ function parseProductPage(html, url) {
         let brewery_name = null;
         $('.product-category a').each((i, el) => {
             const text = $(el).text().trim();
-            // Ignorer les catégories génériques comme "Bière", "Québec", etc.
-            if (text && !['Bière', 'Bières', 'Quebec', 'Québec', 'Canada'].includes(text)) {
+
+            // Liste étendue de catégories à ignorer (styles de bière, lieux, etc.)
+            const excludeList = [
+                // Catégories générales
+                'Bière', 'Bières', 'Beer', 'Beers',
+                // Lieux
+                'Quebec', 'Québec', 'Canada', 'Montréal', 'Montreal',
+                // Styles de bière (très communs)
+                'IPA', 'NEIPA', 'DIPA', 'Triple IPA',
+                'Pale Ale', 'Pale ale', 'American Pale Ale',
+                'Lager', 'Pilsner', 'Blonde', 'Blanche',
+                'Stout', 'Porter', 'Sour', 'Gose',
+                'Saison', 'Farmhouse', 'Berliner',
+                'Wheat', 'Weizen', 'Witbier',
+                'Brown Ale', 'Amber', 'Red Ale',
+                'Session IPA', 'Session', 'Oat Cream IPA',
+                'Hazy IPA', 'West Coast IPA', 'East Coast IPA',
+                'Imperial', 'Double', 'Triple',
+            ];
+
+            if (text && !excludeList.includes(text)) {
                 brewery_name = text;
             }
         });
@@ -515,15 +535,24 @@ function selectBestCandidate(candidates, producer, product) {
 
     const best = scored[0];
 
-    if (best.score >= CONFIG.MIN_SCORE_THRESHOLD) {
-        console.log(`\n✅ Meilleur candidat sélectionné: "${best.beer_name}" (${(best.score * 100).toFixed(0)}%)`);
-        const { score, scoreDetails, ...result } = best;
-        return result;
-    } else {
+    // Vérification du score total
+    if (best.score < CONFIG.MIN_SCORE_THRESHOLD) {
         console.log(`\n⚠️ Meilleur score: ${(best.score * 100).toFixed(0)}% < ${(CONFIG.MIN_SCORE_THRESHOLD * 100).toFixed(0)}% (seuil)`);
         console.log(`   → Retourne null (préfère pas de données que de mauvaises données)`);
         return null;
     }
+
+    // Vérification stricte du producer si fourni
+    if (producer && best.scoreDetails.producer < CONFIG.MIN_PRODUCER_SCORE) {
+        console.log(`\n⚠️ Score producteur trop faible: ${(best.scoreDetails.producer * 100).toFixed(0)}% < ${(CONFIG.MIN_PRODUCER_SCORE * 100).toFixed(0)}% (seuil)`);
+        console.log(`   → Producteur attendu: "${producer}", trouvé: "${best.brewery_name || 'N/A'}"`);
+        console.log(`   → Retourne null (le producteur ne correspond pas assez)`);
+        return null;
+    }
+
+    console.log(`\n✅ Meilleur candidat sélectionné: "${best.beer_name}" (${(best.score * 100).toFixed(0)}%)`);
+    const { score, scoreDetails, ...result } = best;
+    return result;
 }
 
 // ============================================================================

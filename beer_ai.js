@@ -52,7 +52,7 @@ async function getBeers({ limit }) {
 }
 
 // Comparer les données
-function compareData(beer, vtub, masoif, untappd) {
+function compareData(beer, vtub, masoif, espacehoublon, untappd) {
     const comparison = {
         beer_id: beer.id,
         query: {
@@ -69,6 +69,7 @@ function compareData(beer, vtub, masoif, untappd) {
         found: {
             vtub: vtub ? '✓' : '✗',
             masoif: masoif ? '✓' : '✗',
+            espacehoublon: espacehoublon ? '✓' : '✗',
             untappd: untappd ? '✓' : '✗',
         },
         vtub_data: vtub ? {
@@ -89,6 +90,16 @@ function compareData(beer, vtub, masoif, untappd) {
             description: masoif.description ? `${masoif.description.substring(0, 80)}...` : null,
             image: masoif.image_url ? '✓' : '✗',
         } : null,
+        espacehoublon_data: espacehoublon ? {
+            beer_name: espacehoublon.beer_name,
+            brewery: espacehoublon.brewery_name,
+            abv: espacehoublon.abv,
+            style: espacehoublon.style,
+            ibu: espacehoublon.ibu,
+            format: espacehoublon.format,
+            description: espacehoublon.description ? `${espacehoublon.description.substring(0, 80)}...` : null,
+            image: espacehoublon.image_url ? '✓' : '✗',
+        } : null,
         untappd_data: untappd ? {
             beer_name: untappd.beer_name,
             brewery: untappd.brewery_name,
@@ -99,40 +110,43 @@ function compareData(beer, vtub, masoif, untappd) {
             description: untappd.description ? `${untappd.description.substring(0, 80)}...` : null,
             image: untappd.image_url ? '✓' : '✗',
         } : null,
-        quality_score: calculateQualityScore(vtub, masoif, untappd),
+        quality_score: calculateQualityScore(vtub, masoif, espacehoublon, untappd),
     };
 
     return comparison;
 }
 
 // Score de qualité (0-100)
-function calculateQualityScore(vtub, masoif, untappd) {
+function calculateQualityScore(vtub, masoif, espacehoublon, untappd) {
     let score = 0;
 
     // Trouvé sur au moins une source: +20
-    if (vtub || masoif || untappd) score += 20;
+    if (vtub || masoif || espacehoublon || untappd) score += 20;
 
-    // Trouvé sur 2 sources: +15
-    const foundCount = [vtub, masoif, untappd].filter(Boolean).length;
-    if (foundCount === 2) score += 15;
+    // Trouvé sur 2 sources: +10
+    const foundCount = [vtub, masoif, espacehoublon, untappd].filter(Boolean).length;
+    if (foundCount === 2) score += 10;
 
-    // Trouvé sur les 3 sources: +25
-    if (foundCount === 3) score += 25;
+    // Trouvé sur 3 sources: +15
+    if (foundCount === 3) score += 15;
+
+    // Trouvé sur les 4 sources: +25
+    if (foundCount === 4) score += 25;
 
     // ABV trouvé: +15
-    if (vtub?.abv || masoif?.abv || untappd?.beer_abv) score += 15;
+    if (vtub?.abv || masoif?.abv || espacehoublon?.abv || untappd?.beer_abv) score += 15;
 
     // IBU trouvé: +10
-    if (masoif?.ibu || untappd?.beer_ibu) score += 10;
+    if (masoif?.ibu || espacehoublon?.ibu || untappd?.beer_ibu) score += 10;
 
     // Rating trouvé: +10
     if (untappd?.rating_score) score += 10;
 
     // Description trouvée: +10
-    if (vtub?.description || masoif?.description || untappd?.description) score += 10;
+    if (vtub?.description || masoif?.description || espacehoublon?.description || untappd?.description) score += 10;
 
     // Image trouvée: +5
-    if (vtub?.image_url || masoif?.image_url || untappd?.image_url) score += 5;
+    if (vtub?.image_url || masoif?.image_url || espacehoublon?.image_url || untappd?.image_url) score += 5;
 
     return score;
 }
@@ -148,7 +162,7 @@ function printComparison(comp) {
     console.log(`   Description: ${comp.current_db.description} | Image: ${comp.current_db.imageUrl}`);
 
     console.log('\n🔍 RECHERCHE:');
-    console.log(`   VTUB: ${comp.found.vtub} | Masoif: ${comp.found.masoif} | Untappd: ${comp.found.untappd}`);
+    console.log(`   VTUB: ${comp.found.vtub} | Masoif: ${comp.found.masoif} | EspaceHoublon: ${comp.found.espacehoublon} | Untappd: ${comp.found.untappd}`);
     console.log(`   Score qualité: ${comp.quality_score}/100`);
 
     if (comp.vtub_data) {
@@ -170,6 +184,16 @@ function printComparison(comp) {
         console.log(`   Image: ${comp.masoif_data.image}`);
     }
 
+    if (comp.espacehoublon_data) {
+        console.log('\n🥃 ESPACEHOUBLON:');
+        console.log(`   Nom: ${comp.espacehoublon_data.beer_name}`);
+        console.log(`   Brasserie: ${comp.espacehoublon_data.brewery || 'N/A'}`);
+        console.log(`   ABV: ${comp.espacehoublon_data.abv || 'N/A'} | IBU: ${comp.espacehoublon_data.ibu || 'N/A'} | Style: ${comp.espacehoublon_data.style || 'N/A'}`);
+        console.log(`   Format: ${comp.espacehoublon_data.format || 'N/A'}`);
+        console.log(`   Description: ${comp.espacehoublon_data.description || 'N/A'}`);
+        console.log(`   Image: ${comp.espacehoublon_data.image}`);
+    }
+
     if (comp.untappd_data) {
         console.log('\n🍻 UNTAPPD:');
         console.log(`   Nom: ${comp.untappd_data.beer_name}`);
@@ -180,7 +204,7 @@ function printComparison(comp) {
         console.log(`   Image: ${comp.untappd_data.image}`);
     }
 
-    if (!comp.vtub_data && !comp.masoif_data && !comp.untappd_data) {
+    if (!comp.vtub_data && !comp.masoif_data && !comp.espacehoublon_data && !comp.untappd_data) {
         console.log('\n❌ AUCUNE DONNÉE TROUVÉE');
     }
 }
@@ -201,6 +225,7 @@ async function main() {
         total: beers.length,
         vtub_found: 0,
         masoif_found: 0,
+        espacehoublon_found: 0,
         untappd_found: 0,
         all_found: 0,
         none_found: 0,
@@ -215,18 +240,19 @@ async function main() {
 
         try {
             // Recherche
-            const { vtub, masoif, untappd } = await analyzeBeers(producer, product);
+            const { vtub, masoif, espacehoublon, untappd } = await analyzeBeers(producer, product);
 
             // Comparer
-            const comparison = compareData(beer, vtub, masoif, untappd);
+            const comparison = compareData(beer, vtub, masoif, espacehoublon, untappd);
             results.push(comparison);
 
             // Stats
             if (vtub) stats.vtub_found++;
             if (masoif) stats.masoif_found++;
+            if (espacehoublon) stats.espacehoublon_found++;
             if (untappd) stats.untappd_found++;
-            if (vtub && masoif && untappd) stats.all_found++;
-            if (!vtub && !masoif && !untappd) stats.none_found++;
+            if (vtub && masoif && espacehoublon && untappd) stats.all_found++;
+            if (!vtub && !masoif && !espacehoublon && !untappd) stats.none_found++;
             stats.total_quality += comparison.quality_score;
 
             // Afficher
@@ -266,8 +292,9 @@ async function main() {
     console.log(`Total bières testées: ${stats.total}`);
     console.log(`VTUB trouvé: ${stats.vtub_found} (${Math.round(stats.vtub_found / stats.total * 100)}%)`);
     console.log(`Masoif trouvé: ${stats.masoif_found} (${Math.round(stats.masoif_found / stats.total * 100)}%)`);
+    console.log(`EspaceHoublon trouvé: ${stats.espacehoublon_found} (${Math.round(stats.espacehoublon_found / stats.total * 100)}%)`);
     console.log(`Untappd trouvé: ${stats.untappd_found} (${Math.round(stats.untappd_found / stats.total * 100)}%)`);
-    console.log(`Les 3 trouvés: ${stats.all_found} (${Math.round(stats.all_found / stats.total * 100)}%)`);
+    console.log(`Les 4 trouvés: ${stats.all_found} (${Math.round(stats.all_found / stats.total * 100)}%)`);
     console.log(`Aucun trouvé: ${stats.none_found} (${Math.round(stats.none_found / stats.total * 100)}%)`);
     console.log(`Score qualité moyen: ${Math.round(stats.total_quality / stats.total)}/100`);
     console.log('='.repeat(80));

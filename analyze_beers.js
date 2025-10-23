@@ -1,6 +1,7 @@
 const { getUntappdData } = require('./scapper/untapped');
 const { fetchFromVeuxTuUneBiere } = require('./scapper/veuxtuunebiere');
 const { fetchFromMasoif } = require('./scapper/masoif');
+const { fetchFromEspaceHoublon } = require('./scapper/espacehoublon');
 
 /** Parse args: supporte flags (--producer=, --product=) et positionnels ("Prod" "Beer") */
 function parseArgs(argv) {
@@ -36,11 +37,11 @@ function parseArgs(argv) {
  * analyzeBeers(producer, product)
  * - Utilise la nouvelle API v2 avec scoring 2-phases
  * - Passe producer et product séparément pour un meilleur matching
- * - Retourne les données brutes des trois sources
+ * - Retourne les données brutes des quatre sources
  *
  * @param {string|null} producer
  * @param {string|null} product
- * @returns {Promise<{ input:{producer:string|null,product:string|null}, combined:string, vtub:any, masoif:any, untappd:any }>}
+ * @returns {Promise<{ input:{producer:string|null,product:string|null}, combined:string, vtub:any, masoif:any, espacehoublon:any, untappd:any }>}
  */
 async function analyzeBeers(producer, product) {
     if (!producer && !product) {
@@ -49,11 +50,12 @@ async function analyzeBeers(producer, product) {
 
     const combined = producer && product ? `${producer} ${product}` : (product || producer);
 
-    // Appels en parallèle avec producer et product séparés - 3 sources
-    const [untappdData, vtubData, masoifData] = await Promise.all([
+    // Appels en parallèle avec producer et product séparés - 4 sources
+    const [untappdData, vtubData, masoifData, espacehoublonData] = await Promise.all([
         getUntappdData(producer, product),
         fetchFromVeuxTuUneBiere(producer, product),
         fetchFromMasoif(producer, product),
+        fetchFromEspaceHoublon(producer, product),
     ]);
 
     return {
@@ -61,6 +63,7 @@ async function analyzeBeers(producer, product) {
         combined,
         vtub: vtubData || null,
         masoif: masoifData || null,
+        espacehoublon: espacehoublonData || null,
         untappd: untappdData || null,
     };
 }
@@ -95,6 +98,9 @@ if (require.main === module) {
 
             console.log('\n--- Masoif ---');
             console.log(result.masoif);
+
+            console.log('\n--- EspaceHoublon ---');
+            console.log(result.espacehoublon);
 
             console.log('\n--- Untappd ---');
             console.log(result.untappd);

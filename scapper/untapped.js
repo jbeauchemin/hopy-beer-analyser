@@ -2,6 +2,7 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const { searchDuckDuckGo } = require('./duckduckgo');
+const { findBestMatch } = require('../utils/scoring');
 
 const UNTAPPD_API = 'https://9wbo4rq3ho-dsn.algolia.net/1/indexes/beer/query';
 const HEADERS = {
@@ -98,65 +99,48 @@ async function searchUntappd(query) {
 }
 
 // ------------------------------
-// 🧠 SÉLECTION DU MEILLEUR HIT
+// 🧠 SÉLECTION DU MEILLEUR HIT (avec scoring strict)
 // ------------------------------
 function pickBestHit({ hits, producer, product, originalQuery }) {
     if (!hits?.length) return null;
 
-    // Prépare tokens significatifs pour le producteur
-    const prodSig = producer ? significantTokens(producer) : [];
-    const prodSet = new Set(prodSig);
-    const prodMinOverlap = producer ? 0.6 : 0;
-    const prodMinTokens = producer ? Math.max(1, Math.ceil((prodSig.length || 0) * prodMinOverlap)) : 0;
-    const effectiveMinHits = prodSig.length <= 1 ? 1 : prodMinTokens;
+    // Filter hits with minimal ratings
+    const validHits = hits.filter(hit => {
+        const rc = Number(hit.rating_count || 0);
+        return hit.beer_name && rc >= 5; // évite les fiches quasi vides
+    });
 
-    const prodFilter = (breweryName) => {
-        if (!producer) return true;
-        const bSig = significantTokens(breweryName || '');
-        let hits = 0;
-        for (const t of prodSet) if (bSig.includes(t)) hits++;
-        return hits >= effectiveMinHits;
+    if (!validHits.length) return null;
+
+    // Convert hits to candidates format for findBestMatch
+    const candidates = validHits.map(hit => ({
+        beer_name: hit.beer_name,
+        brewery_name: hit.brewery_name || '',
+        // Keep original hit data for enrichment later
+        _untappd_hit: hit
+    }));
+
+    // Use strict scoring from utils/scoring.js
+    const query = {
+        producer: producer || null,
+        product: product || originalQuery || null
     };
 
-    const prodNameSet = product ? tokenSet(product) : null;
+    const bestMatch = findBestMatch(query, candidates);
 
-    let best = { hit: null, score: -Infinity };
-
-    for (const hit of hits) {
-        if (!hit.beer_name) continue;
-
-        const rc = Number(hit.rating_count || 0);
-        if (rc < 5) continue; // évite les fiches quasi vides
-
-        const hitBeer = hit.beer_name || '';
-        const hitBrewery = hit.brewery_name || '';
-
-        // 1) filtre producteur si fourni
-        if (!prodFilter(hitBrewery)) continue;
-
-        // 2) filtre nom trop générique
-        if (isGenericName(hitBeer)) continue;
-
-        // 3) overlap nom produit
-        let nameOverlap = 0;
-        if (product) {
-            nameOverlap = overlapRatio(prodNameSet, tokenSet(hitBeer));
-            if (nameOverlap < 0.5) continue; // ≥50% des tokens input présents
-        } else if (originalQuery) {
-            nameOverlap = overlapRatio(tokenSet(originalQuery), tokenSet(`${hitBrewery} ${hitBeer}`));
-            if (nameOverlap < 0.5) continue;
-        }
-
-        // 4) overlap producteur (score)
-        const prodOverlap = producer ? overlapRatio(new Set(prodSig), tokenSet(hitBrewery + ' ' + hitBrewery)) : 0;
-
-        // 5) score final
-        const score = (nameOverlap * 10) + (prodOverlap * 10) + Math.log10(rc + 1);
-
-        if (score > best.score) best = { hit, score };
+    if (!bestMatch) {
+        console.log('⚠️ Untappd: Aucun candidat ne passe les seuils de validation stricte');
+        return null;
     }
 
-    return best.hit || null;
+    // Log the match quality
+    const { scoreResult } = bestMatch;
+    console.log(`✅ Untappd match: "${bestMatch.beer_name}" (${bestMatch.brewery_name})`);
+    console.log(`   Score: ${(scoreResult.finalScore * 100).toFixed(0)}% (Product: ${(scoreResult.productScore * 100).toFixed(0)}%, Producer: ${(scoreResult.producerScore * 100).toFixed(0)}%)`);
+    console.log(`   Confiance: ${scoreResult.confidence.toUpperCase()}`);
+
+    // Return the original hit data
+    return bestMatch._untappd_hit;
 }
 
 // ------------------------------

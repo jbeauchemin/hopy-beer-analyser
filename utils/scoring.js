@@ -14,8 +14,8 @@ const { distance: levenshtein } = require('fastest-levenshtein');
 // Configuration
 const CONFIG = {
     MIN_SCORE_THRESHOLD: 0.70,          // 70% minimum global score
-    MIN_PRODUCER_SCORE: 0.70,           // 70% minimum producer score (augmenté de 50% pour rejeter brasseries différentes)
-    MIN_PRODUCT_SCORE: 0.60,            // 60% minimum product score
+    MIN_PRODUCER_SCORE: 0.75,           // 75% minimum producer score (augmenté pour rejeter brasseries différentes)
+    MIN_PRODUCT_SCORE: 0.65,            // 65% minimum product score (augmenté pour plus de précision)
     PRODUCT_WEIGHT: 0.6,                // 60% weight for product
     PRODUCER_WEIGHT: 0.4,               // 40% weight for producer
 
@@ -80,11 +80,12 @@ function detectIncompatibleVariations(queryProduct, foundProduct) {
     }
 
     // Détection variations IPA incompatibles - ordre important (du plus spécifique au moins)
+    // Regex permissifs avec ponctuation et espaces
     const ipaVariations = [
-        { type: 'session', regex: /session\s*ipa/i },
-        { type: 'double', regex: /double\s*ipa|dipa/i },
-        { type: 'triple', regex: /triple\s*ipa|tipa/i },
-        { type: 'imperial', regex: /imperial\s*ipa/i },
+        { type: 'session', regex: /session[\s:\-]*ipa/i },
+        { type: 'double', regex: /double[\s:\-]*ipa|dipa/i },
+        { type: 'triple', regex: /triple[\s:\-]*ipa|tipa/i },
+        { type: 'imperial', regex: /imperial[\s:\-]*ipa/i },
         { type: 'standard', regex: /\bipa\b/i },
     ];
 
@@ -148,6 +149,45 @@ function detectIncompatibleVariations(queryProduct, foundProduct) {
             incompatible: false,
             penalty: 0.15,
             reason: `Style confusion: Pale Ale vs IPA`
+        };
+    }
+
+    // Détection Gose vs IPA (styles complètement différents)
+    const queryIsGose = /\bgose\b/i.test(queryProduct);
+    const foundIsGose = /\bgose\b/i.test(foundProduct);
+
+    if ((queryIsGose && foundIsIPA) || (foundIsGose && queryIsIPA)) {
+        return {
+            incompatible: true,
+            reason: `Completely different styles: Gose vs IPA`
+        };
+    }
+
+    // Détection autres styles incompatibles (Gose vs Lager, Stout vs Pilsner, etc.)
+    const beerStyles = {
+        gose: /\bgose\b/i,
+        lager: /\blager\b/i,
+        stout: /\bstout\b/i,
+        porter: /\bporter\b/i,
+        pilsner: /\bpilsner\b/i,
+        weizen: /\bweizen\b/i,
+        berliner: /\bberliner[\s\-]*weisse\b/i,
+        saison: /\bsaison\b/i
+    };
+
+    let queryStyle = null;
+    let foundStyle = null;
+
+    for (const [style, regex] of Object.entries(beerStyles)) {
+        if (!queryStyle && regex.test(queryProduct)) queryStyle = style;
+        if (!foundStyle && regex.test(foundProduct)) foundStyle = style;
+    }
+
+    // Si deux styles différents sont détectés, c'est incompatible
+    if (queryStyle && foundStyle && queryStyle !== foundStyle) {
+        return {
+            incompatible: true,
+            reason: `Incompatible beer styles: "${queryStyle}" vs "${foundStyle}"`
         };
     }
 

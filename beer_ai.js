@@ -40,6 +40,7 @@ function parseArgs(argv) {
         if (a === '--json') args.json = true;
         else if (a === '--save') args.save = true;
         else if (a.startsWith('--limit=')) args.limit = Number(a.split('=')[1]);
+        else if (a.startsWith('--workers=')) args.workers = Number(a.split('=')[1]);
     }
     return args;
 }
@@ -155,6 +156,86 @@ function calculateQualityScore(vtub, masoif, espacehoublon, untappd) {
     return score;
 }
 
+// Traite une bière et retourne le résultat
+async function processBeer(beer, stats, showOutput = true) {
+    const producer = beer.producer?.name || null;
+    const product = beer.productName;
+
+    try {
+        // Recherche
+        const { vtub, masoif, espacehoublon, untappd } = await analyzeBeers(producer, product);
+
+        // Comparer
+        const comparison = compareData(beer, vtub, masoif, espacehoublon, untappd);
+
+        // Stats (thread-safe car appelé séquentiellement pour chaque résultat)
+        if (vtub) stats.vtub_found++;
+        if (masoif) stats.masoif_found++;
+        if (espacehoublon) stats.espacehoublon_found++;
+        if (untappd) stats.untappd_found++;
+        if (vtub && masoif && espacehoublon && untappd) stats.all_found++;
+        if (!vtub && !masoif && !espacehoublon && !untappd) stats.none_found++;
+        stats.total_quality += comparison.quality_score;
+
+        // Afficher
+        if (showOutput) {
+            printComparison(comparison);
+        }
+
+        return comparison;
+    } catch (err) {
+        console.error(`❌ Erreur pour ${product}:`, err.message);
+        return {
+            beer_id: beer.id,
+            query: { producer, product },
+            error: err.message,
+            quality_score: 0,
+        };
+    }
+}
+
+// Traite les bières en parallèle avec un worker pool
+async function processBeersInParallel(beers, workerCount, stats, showOutput) {
+    const results = [];
+    const queue = [...beers];
+    let completed = 0;
+
+    console.log(`🚀 Traitement parallèle avec ${workerCount} workers\n`);
+
+    // Crée un worker qui traite les bières de la queue
+    async function worker(workerId) {
+        while (queue.length > 0) {
+            const beer = queue.shift();
+            if (!beer) break;
+
+            completed++;
+            if (showOutput) {
+                console.log(`[Worker ${workerId}] 🍺 [${completed}/${beers.length}] ${beer.producer?.name || ''} ${beer.productName}`.trim());
+            }
+
+            const result = await processBeer(beer, stats, showOutput);
+            results.push(result);
+
+            // Petit délai pour éviter de surcharger les scrapers
+            if (queue.length > 0) {
+                const delay = 100 + Math.random() * 200;
+                await new Promise(r => setTimeout(r, delay));
+            }
+        }
+    }
+
+    // Lance les workers en parallèle
+    const workers = [];
+    for (let i = 1; i <= workerCount; i++) {
+        workers.push(worker(i));
+    }
+
+    // Attend que tous les workers finissent
+    await Promise.all(workers);
+
+    return results;
+}
+
 // Affichage console lisible
 function printComparison(comp) {
     console.log('\n' + '='.repeat(80));
@@ -216,15 +297,19 @@ function printComparison(comp) {
 // Main
 async function main() {
     const args = parseArgs(process.argv);
+    const workerCount = args.workers || 1;
 
     console.log('🍺 Test de qualité du bot de recherche');
-    console.log(`📊 Limite: ${args.limit || 50} bières\n`);
+    console.log(`📊 Limite: ${args.limit || 50} bières`);
+    if (workerCount > 1) {
+        console.log(`⚡ Workers parallèles: ${workerCount}`);
+    }
+    console.log('');
 
     // Récupérer les bières
     const beers = await getBeers({ limit: args.limit });
     console.log(`📋 ${beers.length} bières à tester\n`);
 
-    const results = [];
     const stats = {
         total: beers.length,
         vtub_found: 0,
@@ -236,52 +321,41 @@ async function main() {
         total_quality: 0,
     };
 
-    // Traiter chaque bière
-    for (let i = 0; i < beers.length; i++) {
-        const beer = beers[i];
-        const producer = beer.producer?.name || null;
-        const product = beer.productName;
+    // Démarrer le chronomètre
+    const startTime = Date.now();
+    const startDate = new Date().toISOString();
 
-        try {
-            // Recherche
-            const { vtub, masoif, espacehoublon, untappd } = await analyzeBeers(producer, product);
+    let results = [];
 
-            // Comparer
-            const comparison = compareData(beer, vtub, masoif, espacehoublon, untappd);
-            results.push(comparison);
+    // Traitement parallèle ou séquentiel
+    if (workerCount > 1) {
+        results = await processBeersInParallel(beers, workerCount, stats, !args.json);
+    } else {
+        // Traitement séquentiel (comportement original)
+        for (let i = 0; i < beers.length; i++) {
+            const beer = beers[i];
 
-            // Stats
-            if (vtub) stats.vtub_found++;
-            if (masoif) stats.masoif_found++;
-            if (espacehoublon) stats.espacehoublon_found++;
-            if (untappd) stats.untappd_found++;
-            if (vtub && masoif && espacehoublon && untappd) stats.all_found++;
-            if (!vtub && !masoif && !espacehoublon && !untappd) stats.none_found++;
-            stats.total_quality += comparison.quality_score;
-
-            // Afficher
-            if (!args.json) {
-                printComparison(comparison);
-            }
+            const result = await processBeer(beer, stats, !args.json);
+            results.push(result);
 
             // Petit délai entre requêtes (chaque scraper a déjà son propre rate limiting)
             if (i < beers.length - 1) {
-                const delay = 100 + Math.random() * 200; // 100-300ms (réduit de 2-3s)
+                const delay = 100 + Math.random() * 200;
                 if (!args.json) {
                     console.log(`\n⏱️  Attente ${delay}ms...\n`);
                 }
                 await new Promise(r => setTimeout(r, delay));
             }
-        } catch (err) {
-            console.error(`❌ Erreur pour ${product}:`, err.message);
-            results.push({
-                beer_id: beer.id,
-                query: { producer, product },
-                error: err.message,
-                quality_score: 0,
-            });
         }
     }
+
+    // Arrêter le chronomètre
+    const endTime = Date.now();
+    const endDate = new Date().toISOString();
+    const durationMs = endTime - startTime;
+    const durationSeconds = Math.round(durationMs / 1000);
+    const durationMinutes = Math.floor(durationSeconds / 60);
+    const remainingSeconds = durationSeconds % 60;
 
     // Sortie JSON sur stdout
     if (args.json) {
@@ -301,6 +375,9 @@ async function main() {
     console.log(`Les 4 trouvés: ${stats.all_found} (${Math.round(stats.all_found / stats.total * 100)}%)`);
     console.log(`Aucun trouvé: ${stats.none_found} (${Math.round(stats.none_found / stats.total * 100)}%)`);
     console.log(`Score qualité moyen: ${Math.round(stats.total_quality / stats.total)}/100`);
+    console.log('');
+    console.log(`⏱️  Temps d'exécution: ${durationMinutes}m ${remainingSeconds}s (${durationSeconds}s total)`);
+    console.log(`   Temps moyen par bière: ${Math.round(durationSeconds / stats.total)}s`);
     console.log('='.repeat(80));
 
     // Sauvegarder si demandé
@@ -319,6 +396,15 @@ async function main() {
             batch_info: {
                 total_beers: stats.total,
                 limit: args.limit || 50,
+                workers: workerCount,
+            },
+            execution_time: {
+                start: startDate,
+                end: endDate,
+                duration_ms: durationMs,
+                duration_seconds: durationSeconds,
+                duration_formatted: `${durationMinutes}m ${remainingSeconds}s`,
+                avg_seconds_per_beer: Math.round(durationSeconds / stats.total * 10) / 10,
             },
             statistics: {
                 vtub_found: stats.vtub_found,

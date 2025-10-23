@@ -1,11 +1,14 @@
 // beer_ai.js (CommonJS)
 // Usage: node beer_ai.js
 //        node beer_ai.js --limit=10
-//        node beer_ai.js --json  (sortie JSON)
+//        node beer_ai.js --json  (sortie JSON sur stdout)
+//        node beer_ai.js --save  (sauvegarder dans results/)
 
 require('dotenv').config();
 const { PrismaClient, Prisma } = require('@prisma/client');
 const { analyzeBeers } = require('./analyze_beers');
+const fs = require('fs');
+const path = require('path');
 
 // Prisma avec conversion Decimal -> number
 const prisma = new PrismaClient().$extends({
@@ -35,6 +38,7 @@ function parseArgs(argv) {
     const args = {};
     for (const a of argv.slice(2)) {
         if (a === '--json') args.json = true;
+        else if (a === '--save') args.save = true;
         else if (a.startsWith('--limit=')) args.limit = Number(a.split('=')[1]);
     }
     return args;
@@ -279,7 +283,7 @@ async function main() {
         }
     }
 
-    // Sortie JSON
+    // Sortie JSON sur stdout
     if (args.json) {
         console.log(JSON.stringify(results, null, 2));
         return;
@@ -298,6 +302,39 @@ async function main() {
     console.log(`Aucun trouvé: ${stats.none_found} (${Math.round(stats.none_found / stats.total * 100)}%)`);
     console.log(`Score qualité moyen: ${Math.round(stats.total_quality / stats.total)}/100`);
     console.log('='.repeat(80));
+
+    // Sauvegarder si demandé
+    if (args.save) {
+        const resultsDir = path.join(__dirname, 'results');
+        if (!fs.existsSync(resultsDir)) {
+            fs.mkdirSync(resultsDir, { recursive: true });
+        }
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+        const filename = `${timestamp}_beer-ai-batch_${stats.total}-beers.json`;
+        const filepath = path.join(resultsDir, filename);
+
+        const output = {
+            timestamp: new Date().toISOString(),
+            batch_info: {
+                total_beers: stats.total,
+                limit: args.limit || 50,
+            },
+            statistics: {
+                vtub_found: stats.vtub_found,
+                masoif_found: stats.masoif_found,
+                espacehoublon_found: stats.espacehoublon_found,
+                untappd_found: stats.untappd_found,
+                all_sources_found: stats.all_found,
+                no_sources_found: stats.none_found,
+                average_quality_score: Math.round(stats.total_quality / stats.total),
+            },
+            results: results,
+        };
+
+        fs.writeFileSync(filepath, JSON.stringify(output, null, 2), 'utf-8');
+        console.log(`\n💾 Résultats sauvegardés: ${filepath}`);
+    }
 }
 
 main()

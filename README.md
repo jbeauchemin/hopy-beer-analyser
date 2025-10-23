@@ -65,9 +65,13 @@ node beer_ai.js
 # Tester 10 bières
 node beer_ai.js --limit=10
 
-# Sortie JSON
+# Sortie JSON sur stdout
 node beer_ai.js --json
 node beer_ai.js --limit=5 --json
+
+# Sauvegarder les résultats dans results/
+node beer_ai.js --save
+node beer_ai.js --limit=10 --save
 ```
 
 ## Architecture

@@ -116,8 +116,11 @@ class ProgressBar {
 
         lines.push('');
 
-        // Print all lines
-        console.log(lines.join('\n'));
+        // Print all lines - use raw output to bypass quiet mode
+        const output = lines.join('\n');
+        if (typeof process.stdout.write === 'function') {
+            process.stdout.write(output + '\n');
+        }
         this.lastLineCount = lines.length;
     }
 
@@ -130,25 +133,69 @@ class ProgressBar {
         const elapsedMin = Math.floor(elapsedSec / 60);
         const elapsedSecRem = elapsedSec % 60;
 
-        console.log(`✅ Terminé en ${elapsedMin}m ${elapsedSecRem}s\n`);
+        // Use stdout.write to bypass quiet mode
+        process.stdout.write(`✅ Terminé en ${elapsedMin}m ${elapsedSecRem}s\n\n`);
     }
 }
 
 // Global quiet mode flag
 let quietMode = false;
+let originalConsoleLog = null;
+let originalConsoleError = null;
 
 function setQuietMode(quiet) {
     quietMode = quiet;
-    // Set environment variable so scrapers can check it
+
     if (quiet) {
+        // Save original console functions
+        if (!originalConsoleLog) {
+            originalConsoleLog = console.log;
+            originalConsoleError = console.error;
+        }
+
+        // Replace console.log with no-op (suppress all logs)
+        console.log = function(...args) {
+            // Silently ignore all console.log calls
+        };
+
+        // Keep console.error but filter out non-critical errors
+        console.error = function(...args) {
+            const msg = args.join(' ');
+            // Only show critical errors, suppress DDG timeouts and navigation errors
+            if (!msg.includes('puppeteer DDG') &&
+                !msg.includes('Navigation timeout') &&
+                !msg.includes('ERR_TIMED_OUT') &&
+                !msg.includes('ERR_CONNECTION_TIMED_OUT')) {
+                originalConsoleError.apply(console, args);
+            }
+        };
+
         process.env.QUIET_MODE = 'true';
     } else {
+        // Restore original console functions
+        if (originalConsoleLog) {
+            console.log = originalConsoleLog;
+            console.error = originalConsoleError;
+            originalConsoleLog = null;
+            originalConsoleError = null;
+        }
         delete process.env.QUIET_MODE;
     }
 }
 
 function isQuietMode() {
     return quietMode || process.env.QUIET_MODE === 'true';
+}
+
+/**
+ * Force log - bypasses quiet mode (for progress bar)
+ */
+function forceLog(...args) {
+    if (originalConsoleLog) {
+        originalConsoleLog.apply(console, args);
+    } else {
+        console.log.apply(console, args);
+    }
 }
 
 /**

@@ -304,17 +304,18 @@ async function main() {
     const args = parseArgs(process.argv);
     const workerCount = args.workers || 1;
 
+    // Show header BEFORE activating quiet mode
+    if (!args.json) {
+        process.stdout.write('🍺 Analyse de Bières - Hopy Beer Analyser\n');
+        process.stdout.write(`📊 Limite: ${args.limit || 50} bières\n`);
+        if (workerCount > 1) {
+            process.stdout.write(`⚡ Workers: ${workerCount}\n`);
+        }
+        process.stdout.write('\n');
+    }
+
     // Activer le mode quiet pour les scrapers (pas de logs verbeux)
     setQuietMode(!args.json);
-
-    if (!args.json) {
-        console.log('🍺 Analyse de Bières - Hopy Beer Analyser');
-        console.log(`📊 Limite: ${args.limit || 50} bières`);
-        if (workerCount > 1) {
-            console.log(`⚡ Workers: ${workerCount}`);
-        }
-        console.log('');
-    }
 
     // Récupérer les bières
     const beers = await getBeers({ limit: args.limit });
@@ -383,6 +384,9 @@ async function main() {
     const durationSeconds = Math.round(durationMs / 1000);
     const durationMinutes = Math.floor(durationSeconds / 60);
     const remainingSeconds = durationSeconds % 60;
+
+    // Disable quiet mode to show final stats
+    setQuietMode(false);
 
     // Sortie JSON sur stdout
     if (args.json) {

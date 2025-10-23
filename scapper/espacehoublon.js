@@ -115,13 +115,23 @@ function parseProductPage(html, url) {
         if (!beer_name) return null;
 
         // 2. Info ligne - Format: "Pale Ale | 473 ml | 5,5%"
-        // Chercher dans les paragraphes proches du titre
+        // Chercher dans tous les paragraphes
         let style = null;
         let format = null;
         let abv = null;
 
-        const infoText = $('.product-desc p, .product-short-description p, .summary p').first().text().trim();
-        if (infoText && infoText.includes('|')) {
+        // Essayer plusieurs sélecteurs pour trouver le paragraphe avec le format "X | Y ml | Z%"
+        let infoText = null;
+        $('p').each((i, el) => {
+            const text = $(el).text().trim();
+            // Chercher un paragraphe qui contient "ml" et "|" et "%"
+            if (text.includes('|') && text.match(/ml/i) && text.match(/%/)) {
+                infoText = text;
+                return false; // break
+            }
+        });
+
+        if (infoText) {
             const parts = infoText.split('|').map(p => p.trim());
 
             // parts[0] = Style (ex: "Pale Ale")
@@ -161,32 +171,37 @@ function parseProductPage(html, url) {
             null;
 
         // 5. Description - Chercher dans les paragraphes de description
-        // (éviter le premier paragraphe qui contient style|format|abv)
+        // (éviter le paragraphe qui contient style|format|abv et celui avec houblons)
         let description = null;
-        $('.product-desc p, .product-short-description p, .summary p').each((i, el) => {
-            const text = $(el).text().trim();
-            // Prendre le premier paragraphe qui ne contient pas le format style|format|abv
-            if (text && !text.includes('|') && text.length > 20) {
-                description = text;
-                return false; // break
-            }
-        });
-
-        // 6. Houblons - Chercher "Houblons XXX"
         let hops = null;
-        $('.product-desc p, .product-short-description p, .summary p').each((i, el) => {
+
+        // Parcourir tous les paragraphes
+        $('p').each((i, el) => {
             const text = $(el).text().trim();
-            if (text.toLowerCase().startsWith('houblon')) {
+
+            // Identifier le paragraphe houblons
+            if (text.toLowerCase().match(/^houblons?\s*[:：]?\s*/i)) {
                 hops = text;
+                return; // continue
+            }
+
+            // Ignorer le paragraphe info (avec |)
+            if (text.includes('|') && text.match(/ml/i)) {
+                return; // continue
+            }
+
+            // Prendre le premier paragraphe substantiel pour description
+            if (!description && text.length > 20 && !text.match(/^houblons?\s*[:：]?\s*/i)) {
+                description = text;
             }
         });
 
-        // Ajouter les houblons à la description si trouvés
-        if (hops && description) {
-            description = `${description}\n\n${hops}`;
-        } else if (hops && !description) {
-            description = hops;
-        }
+        // Construire la description complète
+        const descriptionParts = [];
+        if (description) descriptionParts.push(description);
+        if (hops) descriptionParts.push(hops);
+
+        const fullDescription = descriptionParts.length > 0 ? descriptionParts.join('\n\n') : null;
 
         // 7. IBU - Chercher dans la description ou ailleurs
         let ibu = null;
@@ -204,7 +219,7 @@ function parseProductPage(html, url) {
             abv: abv,
             ibu: ibu,
             style: style,
-            description: description,
+            description: fullDescription,
             image_url: image_url,
             format: format,
         };

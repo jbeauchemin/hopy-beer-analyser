@@ -9,6 +9,7 @@ const { PrismaClient, Prisma } = require('@prisma/client');
 const { analyzeBeers } = require('./analyze_beers');
 const fs = require('fs');
 const path = require('path');
+const { ProgressBar, setQuietMode } = require('./utils/progress');
 
 // Prisma avec conversion Decimal -> number
 const prisma = new PrismaClient().$extends({
@@ -195,12 +196,9 @@ async function processBeer(beer, stats, showOutput = true) {
 }
 
 // Traite les bières en parallèle avec un worker pool
-async function processBeersInParallel(beers, workerCount, stats, showOutput) {
+async function processBeersInParallel(beers, workerCount, stats, showOutput, progressBar) {
     const results = [];
     const queue = [...beers];
-    let completed = 0;
-
-    console.log(`🚀 Traitement parallèle avec ${workerCount} workers\n`);
 
     // Crée un worker qui traite les bières de la queue
     async function worker(workerId) {
@@ -208,13 +206,20 @@ async function processBeersInParallel(beers, workerCount, stats, showOutput) {
             const beer = queue.shift();
             if (!beer) break;
 
-            completed++;
-            if (showOutput) {
-                console.log(`[Worker ${workerId}] 🍺 [${completed}/${beers.length}] ${beer.producer?.name || ''} ${beer.productName}`.trim());
+            // Update progress with current beer
+            const beerLabel = `${beer.producer?.name || ''} ${beer.productName}`.trim();
+            if (progressBar) {
+                progressBar.updateWorker(workerId, beerLabel);
             }
 
-            const result = await processBeer(beer, stats, showOutput);
+            const result = await processBeer(beer, stats, false); // Always quiet in batch mode
             results.push(result);
+
+            // Update progress
+            if (progressBar) {
+                progressBar.updateWorker(workerId, null); // Clear worker
+                progressBar.increment(!result.error);
+            }
 
             // Petit délai pour éviter de surcharger les scrapers
             if (queue.length > 0) {
@@ -299,16 +304,20 @@ async function main() {
     const args = parseArgs(process.argv);
     const workerCount = args.workers || 1;
 
-    console.log('🍺 Test de qualité du bot de recherche');
-    console.log(`📊 Limite: ${args.limit || 50} bières`);
-    if (workerCount > 1) {
-        console.log(`⚡ Workers parallèles: ${workerCount}`);
+    // Activer le mode quiet pour les scrapers (pas de logs verbeux)
+    setQuietMode(!args.json);
+
+    if (!args.json) {
+        console.log('🍺 Analyse de Bières - Hopy Beer Analyser');
+        console.log(`📊 Limite: ${args.limit || 50} bières`);
+        if (workerCount > 1) {
+            console.log(`⚡ Workers: ${workerCount}`);
+        }
+        console.log('');
     }
-    console.log('');
 
     // Récupérer les bières
     const beers = await getBeers({ limit: args.limit });
-    console.log(`📋 ${beers.length} bières à tester\n`);
 
     const stats = {
         total: beers.length,
@@ -327,26 +336,44 @@ async function main() {
 
     let results = [];
 
+    // Create progress bar
+    const progressBar = !args.json ? new ProgressBar(beers.length, { workers: workerCount }) : null;
+    if (progressBar) {
+        progressBar.start();
+    }
+
     // Traitement parallèle ou séquentiel
     if (workerCount > 1) {
-        results = await processBeersInParallel(beers, workerCount, stats, !args.json);
+        results = await processBeersInParallel(beers, workerCount, stats, !args.json, progressBar);
     } else {
-        // Traitement séquentiel (comportement original)
+        // Traitement séquentiel avec barre de progression
         for (let i = 0; i < beers.length; i++) {
             const beer = beers[i];
 
-            const result = await processBeer(beer, stats, !args.json);
+            if (progressBar) {
+                const beerLabel = `${beer.producer?.name || ''} ${beer.productName}`.trim();
+                progressBar.updateWorker(1, beerLabel);
+            }
+
+            const result = await processBeer(beer, stats, false);
             results.push(result);
+
+            if (progressBar) {
+                progressBar.updateWorker(1, null);
+                progressBar.increment(!result.error);
+            }
 
             // Petit délai entre requêtes (chaque scraper a déjà son propre rate limiting)
             if (i < beers.length - 1) {
                 const delay = 100 + Math.random() * 200;
-                if (!args.json) {
-                    console.log(`\n⏱️  Attente ${delay}ms...\n`);
-                }
                 await new Promise(r => setTimeout(r, delay));
             }
         }
+    }
+
+    // Finish progress bar
+    if (progressBar) {
+        progressBar.finish();
     }
 
     // Arrêter le chronomètre

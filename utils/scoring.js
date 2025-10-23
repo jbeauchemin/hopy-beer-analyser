@@ -208,8 +208,13 @@ function validateProducer(queryProducer, foundProducer) {
     const query = normalize(queryProducer);
     const found = normalize(foundProducer);
 
+    console.log(`[SCORING DEBUG] validateProducer:`);
+    console.log(`  Query: "${queryProducer}" → normalized: "${query}"`);
+    console.log(`  Found: "${foundProducer}" → normalized: "${found}"`);
+
     // Exact match
     if (query === found) {
+        console.log(`  ✓ EXACT MATCH`);
         return { score: 1.0, reason: 'Exact match' };
     }
 
@@ -218,16 +223,24 @@ function validateProducer(queryProducer, foundProducer) {
     const queryWords = query.split(/\s+/).filter(w => w.length > 2 && !genericWords.includes(w));
     const foundWords = found.split(/\s+/).filter(w => w.length > 2 && !genericWords.includes(w));
 
+    console.log(`  Query words (significant): [${queryWords.join(', ')}]`);
+    console.log(`  Found words (significant): [${foundWords.join(', ')}]`);
+
     const commonWords = queryWords.filter(w => foundWords.includes(w));
     const wordMatchScore = commonWords.length / Math.max(queryWords.length, foundWords.length, 1);
 
+    console.log(`  Common words: [${commonWords.join(', ')}] (${commonWords.length})`);
+    console.log(`  Word match score: ${(wordMatchScore * 100).toFixed(0)}%`);
+
     // Levenshtein similarity
     const similarity = calculateLevenshteinSimilarity(queryProducer, foundProducer);
+    console.log(`  Levenshtein similarity: ${(similarity * 100).toFixed(0)}%`);
 
     // ULTRA-STRICT: Si AUCUN mot significatif en commun = brasseries complètement différentes
     // Cela rejette: "Menaud" vs "UnBarred", "Charlevoix" vs "La Voie Maltée", etc.
     // Mais garde: "Dieu du Ciel" vs "Brasserie Dieu du Ciel" (mots "dieu" et "ciel" en commun)
     if (commonWords.length === 0) {
+        console.log(`  ✗ REJECTED: No common significant words!`);
         return {
             score: 0,
             reason: `Completely different breweries: "${queryProducer}" vs "${foundProducer}" (no common significant words)`,
@@ -235,8 +248,11 @@ function validateProducer(queryProducer, foundProducer) {
         };
     }
 
+    console.log(`  ✓ PASSED: Has common words`);
+
     // Very different producers even with some similarity
     if (similarity < 0.40 && wordMatchScore < 0.40) {
+        console.log(`  ⚠ WARNING: Low similarity and word match`);
         return {
             score: Math.max(similarity, wordMatchScore),
             reason: `Very different producers: "${queryProducer}" vs "${foundProducer}" (similarity: ${(similarity * 100).toFixed(0)}%, word match: ${(wordMatchScore * 100).toFixed(0)}%)`,
@@ -246,14 +262,17 @@ function validateProducer(queryProducer, foundProducer) {
 
     // Check if one contains the other
     if (query.includes(found) || found.includes(query)) {
+        const substringScore = Math.max(0.85, similarity);
+        console.log(`  ✓ SUBSTRING MATCH: score = ${(substringScore * 100).toFixed(0)}%`);
         return {
-            score: Math.max(0.85, similarity),
+            score: substringScore,
             reason: 'Substring match'
         };
     }
 
     // Combine Levenshtein and word matching (prendre le meilleur)
     const finalScore = Math.max(similarity, wordMatchScore);
+    console.log(`  Final score: ${(finalScore * 100).toFixed(0)}%`);
 
     return {
         score: finalScore,
@@ -270,6 +289,10 @@ function validateProducer(queryProducer, foundProducer) {
  * Score un produit avec le nouveau système avancé
  */
 function scoreProduct(queryProduct, foundProduct) {
+    console.log(`[SCORING DEBUG] scoreProduct:`);
+    console.log(`  Query: "${queryProduct}"`);
+    console.log(`  Found: "${foundProduct}"`);
+
     if (!queryProduct || !foundProduct) {
         return { score: 0, reason: 'Missing product information' };
     }
@@ -277,6 +300,7 @@ function scoreProduct(queryProduct, foundProduct) {
     // Check incompatible variations first
     const variationCheck = detectIncompatibleVariations(queryProduct, foundProduct);
     if (variationCheck.incompatible) {
+        console.log(`  ✗ REJECTED: Incompatible variation - ${variationCheck.reason}`);
         return {
             score: 0,
             reason: variationCheck.reason,
@@ -286,6 +310,7 @@ function scoreProduct(queryProduct, foundProduct) {
 
     // Calculate Levenshtein similarity
     const similarity = calculateLevenshteinSimilarity(queryProduct, foundProduct);
+    console.log(`  Levenshtein similarity: ${(similarity * 100).toFixed(0)}%`);
 
     // STRICT: Vérifier si les produits ont au moins un mot significatif en commun
     // (exclure mots génériques comme "sans alcool", "IPA", styles de bière, etc.)
@@ -303,12 +328,17 @@ function scoreProduct(queryProduct, foundProduct) {
     const queryWords = query.split(/\s+/).filter(w => w.length > 2 && !genericProductWords.includes(w));
     const foundWords = found.split(/\s+/).filter(w => w.length > 2 && !genericProductWords.includes(w));
 
+    console.log(`  Query words (significant): [${queryWords.join(', ')}] (${queryWords.length} words)`);
+    console.log(`  Found words (significant): [${foundWords.join(', ')}] (${foundWords.length} words)`);
+
     const commonWords = queryWords.filter(w => foundWords.includes(w));
+    console.log(`  Common words: [${commonWords.join(', ')}] (${commonWords.length})`);
 
     // Si au moins 2 mots significatifs dans la query
     if (queryWords.length >= 2) {
         // Aucun mot significatif en commun ET similarité faible = produits différents
         if (commonWords.length === 0 && similarity < 0.50) {
+            console.log(`  ✗ REJECTED: No common words and low similarity`);
             return {
                 score: 0,
                 reason: `Completely different products: "${queryProduct}" vs "${foundProduct}" (no common words, ${(similarity * 100).toFixed(0)}% similarity)`,
@@ -323,12 +353,16 @@ function scoreProduct(queryProduct, foundProduct) {
         // Mots du found qui ne sont PAS dans query
         const extraWords = foundWords.filter(w => !queryWords.includes(w));
 
+        console.log(`  SHORT NAME CHECK: query has ${queryWords.length} words, found has ${foundWords.length} words`);
+        console.log(`  Extra words in found: [${extraWords.join(', ')}]`);
+
         // Si des mots supplémentaires NON génériques = suspect
         // "Smash" vs "Super Smash" → extra: ["super"] → reject
         // "Moralité" vs "Moralité" → extra: [] → OK
         if (extraWords.length > 0 && commonWords.length === queryWords.length) {
             // Tous les mots de query sont dans found, mais found a des extras
             // C'est probablement un produit différent (Super Smash ≠ Smash)
+            console.log(`  ✗ REJECTED: Found has extra words (all query words present + extras)`);
             return {
                 score: 0,
                 reason: `Product has extra significant words: "${queryProduct}" (${queryWords.join(', ')}) vs "${foundProduct}" (extra: ${extraWords.join(', ')})`,

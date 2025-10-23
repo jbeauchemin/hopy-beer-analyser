@@ -2,6 +2,7 @@
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const AnonymizeUAPlugin = require('puppeteer-extra-plugin-anonymize-ua');
+const { duckDuckGoQueue, getSharedBrowser, releaseSharedBrowser } = require('../utils/request-queue');
 
 puppeteer.use(StealthPlugin());
 puppeteer.use(AnonymizeUAPlugin({ stripHeadless: true, makeWindows: true }));
@@ -174,14 +175,9 @@ async function validateUrlContainsTokens(page, url, context = {}) {
 }
 
 /**
- * searchDuckDuckGo via Puppeteer (stricter, with producer+product support)
- * @param {string} query              e.g. "Menaud Camerise" (utilisé pour la requête DDG)
- * @param {string} requiredHost       e.g. "veuxtuunebiere.com" | "untappd.com"
- * @param {string} requiredPathPrefix e.g. "/products/" | "/b/"  (défaut "/products/")
- * @param {object} opts               e.g. { producer, product }
- * @returns {Promise<string|null>}
+ * Internal search function (with shared browser)
  */
-async function searchDuckDuckGo(query, requiredHost, requiredPathPrefix = '/products/', opts = {}) {
+async function _searchDuckDuckGoInternal(query, requiredHost, requiredPathPrefix = '/products/', opts = {}) {
     if (!query || !requiredHost) return null;
 
     const host = normalizeHost(requiredHost);
@@ -197,7 +193,8 @@ async function searchDuckDuckGo(query, requiredHost, requiredPathPrefix = '/prod
         `site:${host} ${qUnquoted}`,
     ];
 
-    const browser = await puppeteer.launch(LAUNCH_OPTS);
+    // Use shared browser instead of launching new one
+    const browser = await getSharedBrowser();
 
     try {
         for (const humanQ of humanQueries) {
@@ -207,12 +204,12 @@ async function searchDuckDuckGo(query, requiredHost, requiredPathPrefix = '/prod
             const page = await browser.newPage();
             await page.setUserAgent(UA);
             await page.setExtraHTTPHeaders({ 'accept-language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7' });
-            page.setDefaultNavigationTimeout(30000);
-            page.setDefaultTimeout(30000);
+            page.setDefaultNavigationTimeout(60000);  // Increased from 30s to 60s
+            page.setDefaultTimeout(60000);
 
             try {
                 await sleep(600 + Math.random() * 800);
-                await page.goto(ddgUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+                await page.goto(ddgUrl, { waitUntil: 'networkidle2', timeout: 60000 });  // Increased timeout
 
                 // IMPORTANT: Attendre que les résultats se chargent (DuckDuckGo charge async via JS)
                 try {
@@ -280,7 +277,7 @@ async function searchDuckDuckGo(query, requiredHost, requiredPathPrefix = '/prod
                     const found = results.find(Boolean);
                     if (found) {
                         await page.close();
-                        await browser.close();
+                        // Don't close shared browser
                         return found;
                     }
 
@@ -290,7 +287,7 @@ async function searchDuckDuckGo(query, requiredHost, requiredPathPrefix = '/prod
                 // Pas validé ? Renvoie le premier candidat filtré (best-effort)
                 const fallback = productCandidates[0] || null;
                 await page.close();
-                await browser.close();
+                // Don't close shared browser
                 return fallback;
             } catch (err) {
                 console.error('❌ Erreur puppeteer DDG:', err.message);
@@ -299,10 +296,33 @@ async function searchDuckDuckGo(query, requiredHost, requiredPathPrefix = '/prod
             }
         }
     } finally {
-        try { await browser.close(); } catch { }
+        // Don't close shared browser - it's managed globally
     }
 
     return null;
+}
+
+/**
+ * Public API - searchDuckDuckGo via global queue
+ * Prevents rate limiting by queueing all DDG requests globally
+ *
+ * @param {string} query              e.g. "Menaud Camerise" (utilisé pour la requête DDG)
+ * @param {string} requiredHost       e.g. "veuxtuunebiere.com" | "untappd.com"
+ * @param {string} requiredPathPrefix e.g. "/products/" | "/b/"  (défaut "/products/")
+ * @param {object} opts               e.g. { producer, product }
+ * @returns {Promise<string|null>}
+ */
+async function searchDuckDuckGo(query, requiredHost, requiredPathPrefix = '/products/', opts = {}) {
+    // Enqueue request to prevent rate limiting
+    return duckDuckGoQueue.enqueue(
+        async () => _searchDuckDuckGoInternal(query, requiredHost, requiredPathPrefix, opts),
+        {
+            label: `DDG: ${requiredHost} - ${query.substring(0, 30)}...`,
+            timeout: 90000,  // 90s timeout (increased from 30s)
+            retries: 2,
+            priority: 0
+        }
+    );
 }
 
 module.exports = { searchDuckDuckGo };

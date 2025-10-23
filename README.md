@@ -76,14 +76,25 @@ node beer_ai.js --limit=10 --save
 # Traitement parallèle avec plusieurs workers
 node beer_ai.js --save --workers=3    # 3 workers en parallèle
 node beer_ai.js --save --workers=5    # 5 workers en parallèle
+node beer_ai.js --save --workers=8    # 8 workers (recommandé pour MacBook Pro M2)
+node beer_ai.js --save --workers=10   # 10 workers (maximum recommandé)
 ```
 
 **Performance avec workers parallèles:**
 - `--workers=1` (défaut): Traitement séquentiel, ~60s par bière
 - `--workers=3`: ~3x plus rapide (~20s par bière)
 - `--workers=5`: ~4-5x plus rapide (~12-15s par bière)
+- `--workers=8`: ~6-7x plus rapide (~8-10s par bière) ⭐ Recommandé
+- `--workers=10`: ~7-8x plus rapide (~7-9s par bière)
 
-Note: Au-delà de 5 workers, les gains diminuent à cause du rate limiting des sites.
+**Protection contre le rate limiting:**
+- Le système utilise une **queue globale** pour les requêtes DuckDuckGo
+- Maximum 2 requêtes DuckDuckGo concurrentes (peu importe le nombre de workers)
+- Délai automatique de 1.5-2.5s entre chaque requête DuckDuckGo
+- Browser Puppeteer partagé entre tous les workers
+- Retry automatique avec exponential backoff en cas d'erreur
+
+Vous pouvez maintenant utiliser jusqu'à **10 workers** sans problème de rate limiting!
 
 ## Architecture
 

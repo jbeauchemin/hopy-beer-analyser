@@ -264,11 +264,11 @@ async function main() {
                 printComparison(comparison);
             }
 
-            // Délai entre requêtes
+            // Petit délai entre requêtes (chaque scraper a déjà son propre rate limiting)
             if (i < beers.length - 1) {
-                const delay = 2000 + Math.random() * 1000;
+                const delay = 100 + Math.random() * 200; // 100-300ms (réduit de 2-3s)
                 if (!args.json) {
-                    console.log(`\n⏱️  Attente ${Math.round(delay / 1000)}s...\n`);
+                    console.log(`\n⏱️  Attente ${delay}ms...\n`);
                 }
                 await new Promise(r => setTimeout(r, delay));
             }

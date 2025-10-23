@@ -103,80 +103,89 @@ function parseProductPage(html, url) {
     try {
         const $ = cheerio.load(html);
 
-        // Patterns de sélecteurs pour masoif.com
-        // Ces sélecteurs seront ajustés une fois qu'on connaît la structure exacte
+        // 1. Titre de la bière
         const beer_name =
-            $('h1.product-title').text().trim() ||
-            $('h1.product__title').text().trim() ||
-            $('h1[itemprop="name"]').text().trim() ||
+            $('h1.product_title.entry-title').text().trim() ||
+            $('h1.elementor-heading-title').text().trim() ||
             $('h1').first().text().trim();
 
-        const brewery_name =
-            $('.product-vendor').text().trim() ||
-            $('.product__vendor').text().trim() ||
-            $('[itemprop="brand"]').text().trim() ||
-            $('.vendor').text().trim();
+        if (!beer_name) return null;
 
-        // ABV - chercher dans différents formats
+        // 2. Attributs de la bière (brasserie, format, ABV)
+        // Dans: <ul class="attributs-biere"><li><span class="attribute-value">Le Prospecteur</span></li>...
+        const attributs = [];
+        $('ul.attributs-biere li span.attribute-value').each((i, el) => {
+            const text = $(el).text().trim();
+            if (text) attributs.push(text);
+        });
+
+        // attributs[0] = Brasserie (ou lien vers brasserie)
+        // attributs[1] = Format (ex: "473 ml")
+        // attributs[2] = ABV (ex: "5.0%")
+
+        const brewery_name = attributs[0] || null;
+        const format = attributs[1] || null;
+
         let abv = null;
-        const abvPatterns = [
-            /(\d+(?:[.,]\d+)?)\s*%\s*alc/i,
-            /alc[:\s]*(\d+(?:[.,]\d+)?)\s*%/i,
-            /(\d+(?:[.,]\d+)?)\s*%/i,
-        ];
-
-        const bodyText = $('body').text();
-        for (const pattern of abvPatterns) {
-            const match = bodyText.match(pattern);
-            if (match) {
-                abv = parseFloat(match[1].replace(',', '.'));
-                break;
+        if (attributs[2]) {
+            const abvMatch = attributs[2].match(/(\d+(?:[.,]\d+)?)\s*%/);
+            if (abvMatch) {
+                abv = parseFloat(abvMatch[1].replace(',', '.'));
             }
         }
 
-        // IBU
-        let ibu = null;
-        const ibuMatch = bodyText.match(/(\d+)\s*IBU/i);
-        if (ibuMatch) {
-            ibu = parseInt(ibuMatch[1]);
+        // 3. Image - Chercher dans la galerie produit
+        let image_url =
+            $('.woocommerce-product-gallery img.wp-post-image').attr('src') ||
+            $('.woocommerce-product-gallery img.wp-post-image').attr('data-src') ||
+            $('.woocommerce-product-gallery img').first().attr('src') ||
+            null;
+
+        // Nettoyer l'URL de l'image (enlever les paramètres de redimensionnement si nécessaire)
+        if (image_url && image_url.includes('?')) {
+            // Garder l'URL complète avec les paramètres
+            image_url = image_url.split('&ssl=')[0] + '&ssl=1';
         }
 
-        // Style
-        const style =
-            $('.product-type').text().trim() ||
-            $('.product__type').text().trim() ||
-            $('[itemprop="category"]').text().trim() ||
-            null;
-
-        // Description
+        // 4. Description - Dans .elementor-shortcode p
         const description =
-            $('.product-description').text().trim() ||
-            $('.product__description').text().trim() ||
-            $('[itemprop="description"]').text().trim() ||
-            $('.description').text().trim() ||
+            $('.single-product-desc .elementor-shortcode p').text().trim() ||
+            $('.elementor-shortcode p').first().text().trim() ||
             null;
 
-        // Image
-        const image_url =
-            $('img.product-image').attr('src') ||
-            $('img.product__image').attr('src') ||
-            $('[itemprop="image"]').attr('src') ||
-            $('img').first().attr('src') ||
-            null;
+        // 5. IBU - Extraire de la description
+        let ibu = null;
+        if (description) {
+            // Chercher "IBU : 10 à 11" ou "IBU : 10"
+            const ibuMatch = description.match(/IBU\s*:\s*(\d+)(?:\s*(?:à|a)\s*(\d+))?/i);
+            if (ibuMatch) {
+                // Si plage (ex: "10 à 11"), prendre la moyenne ou le premier
+                ibu = parseInt(ibuMatch[1]);
+            }
+        }
 
-        // Format
-        const format =
-            $('.product-format').text().trim() ||
-            $('.format').text().trim() ||
-            null;
+        // 6. Style/Profil - Dans ul.fiche-produit
+        let style = null;
+        $('ul.fiche-produit li').each((i, el) => {
+            const label = $(el).find('.attribute-label').text().trim();
+            if (label.includes('Profil')) {
+                style = $(el).find('.attribute-value').text().trim();
+            }
+        });
 
-        if (!beer_name) return null;
+        // Fallback: chercher dans la description
+        if (!style && description) {
+            const styleMatch = description.match(/Style\s*:\s*([^\n•]+)/i);
+            if (styleMatch) {
+                style = styleMatch[1].trim();
+            }
+        }
 
         return {
             source: 'masoif.com',
             url: url,
             beer_name: beer_name,
-            brewery_name: brewery_name || null,
+            brewery_name: brewery_name,
             abv: abv,
             ibu: ibu,
             style: style,

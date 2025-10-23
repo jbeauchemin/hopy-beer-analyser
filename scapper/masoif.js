@@ -298,32 +298,24 @@ async function collectCandidatesFromDuckDuckGo(producer, product) {
 
     for (const query of queries) {
         try {
-            // Corriger l'appel: 3e paramètre = requiredPathPrefix (string), pas un objet
-            const results = await searchDuckDuckGo(
+            // searchDuckDuckGo retourne UNE URL (string), pas un array
+            const url = await searchDuckDuckGo(
                 query,
                 'masoif.com',
-                '/produit/'  // <- Chemin correct pour masoif.com
+                '/produit/',  // <- Chemin correct pour masoif.com
+                { product, producer }  // <- IMPORTANT: passer opts pour validation
             );
 
-            if (!results || !Array.isArray(results)) {
+            if (!url) {
                 console.log('  ⚠️  Pas de résultats DuckDuckGo');
                 continue;
             }
 
-            for (const result of results) {
-                if (result && result.url) {
-                    // DuckDuckGo peut retourner des résultats déjà parsés
-                    if (result.beer_name) {
-                        candidates.push(result);
-                    } else {
-                        // Sinon, fetch et parse la page
-                        const parsed = await fetchProductPage(result.url);
-                        if (parsed) {
-                            console.log(`  ✓ Trouvé: ${parsed.beer_name}`);
-                            candidates.push(parsed);
-                        }
-                    }
-                }
+            // Fetch et parse la page trouvée
+            const parsed = await fetchProductPage(url);
+            if (parsed) {
+                console.log(`  ✓ Trouvé via DuckDuckGo: ${parsed.beer_name}`);
+                candidates.push(parsed);
             }
 
             if (candidates.length >= 5) break; // Limite pour éviter trop de requêtes

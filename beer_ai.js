@@ -200,19 +200,27 @@ async function processBeersInParallel(beers, workerCount, stats, showOutput, pro
     const results = [];
     const queue = [...beers];
 
+    process.stdout.write(`[DEBUG] processBeersInParallel démarré avec ${beers.length} bières et ${workerCount} workers\n`);
+
     // Crée un worker qui traite les bières de la queue
     async function worker(workerId) {
+        process.stdout.write(`[DEBUG] Worker ${workerId} démarré\n`);
+
         while (queue.length > 0) {
             const beer = queue.shift();
             if (!beer) break;
 
             // Update progress with current beer
             const beerLabel = `${beer.producer?.name || ''} ${beer.productName}`.trim();
+            process.stdout.write(`[DEBUG] Worker ${workerId} traite: ${beerLabel}\n`);
+
             if (progressBar) {
                 progressBar.updateWorker(workerId, beerLabel);
             }
 
+            process.stdout.write(`[DEBUG] Worker ${workerId} appelle processBeer...\n`);
             const result = await processBeer(beer, stats, false); // Always quiet in batch mode
+            process.stdout.write(`[DEBUG] Worker ${workerId} processBeer terminé\n`);
             results.push(result);
 
             // Update progress

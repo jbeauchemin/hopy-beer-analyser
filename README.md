@@ -72,7 +72,18 @@ node beer_ai.js --limit=5 --json
 # Sauvegarder les résultats dans results/
 node beer_ai.js --save
 node beer_ai.js --limit=10 --save
+
+# Traitement parallèle avec plusieurs workers
+node beer_ai.js --save --workers=3    # 3 workers en parallèle
+node beer_ai.js --save --workers=5    # 5 workers en parallèle
 ```
+
+**Performance avec workers parallèles:**
+- `--workers=1` (défaut): Traitement séquentiel, ~60s par bière
+- `--workers=3`: ~3x plus rapide (~20s par bière)
+- `--workers=5`: ~4-5x plus rapide (~12-15s par bière)
+
+Note: Au-delà de 5 workers, les gains diminuent à cause du rate limiting des sites.
 
 ## Architecture
 
@@ -181,27 +192,50 @@ Les fichiers sont sauvegardés dans `results/` avec le format:
 - Nom: `YYYY-MM-DDTHH-MM-SS_producer-product.json`
 - Contenu: Query, résultats de chaque source, et résumé
 
-Exemple de structure JSON:
+Exemple de structure JSON (pour `beer_ai.js --save`):
 ```json
 {
   "timestamp": "2025-01-23T14:30:45.123Z",
-  "query": {
-    "producer": "Messorem",
-    "product": "Naufragé Oublié",
-    "combined": "Messorem Naufragé Oublié"
+  "batch_info": {
+    "total_beers": 18,
+    "limit": 50,
+    "workers": 3
   },
-  "results": {
-    "veuxtuunebiere": { ... },
-    "masoif": { ... },
-    "espacehoublon": { ... },
-    "untappd": { ... }
+  "execution_time": {
+    "start": "2025-01-23T14:30:00.000Z",
+    "end": "2025-01-23T14:45:30.000Z",
+    "duration_ms": 930000,
+    "duration_seconds": 930,
+    "duration_formatted": "15m 30s",
+    "avg_seconds_per_beer": 51.7
   },
-  "summary": {
-    "sources_found": ["veuxtuunebiere", "espacehoublon", "untappd"],
-    "total_sources": 3
-  }
+  "statistics": {
+    "vtub_found": 12,
+    "masoif_found": 10,
+    "espacehoublon_found": 14,
+    "untappd_found": 15,
+    "all_sources_found": 8,
+    "no_sources_found": 2,
+    "average_quality_score": 65
+  },
+  "results": [
+    {
+      "beer_id": 123,
+      "query": { "producer": "Messorem", "product": "Naufragé Oublié" },
+      "found": { "vtub": "✓", "masoif": "✗", "espacehoublon": "✓", "untappd": "✓" },
+      "quality_score": 75,
+      "vtub_data": { ... },
+      "espacehoublon_data": { ... },
+      "untappd_data": { ... }
+    }
+  ]
 }
 ```
+
+Le fichier JSON inclut maintenant:
+- **execution_time**: Temps total et moyen par bière
+- **batch_info**: Nombre de workers utilisés
+- **statistics**: Stats globales de la batch
 
 ## Notes
 

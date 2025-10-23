@@ -8,6 +8,7 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const { searchDuckDuckGo } = require('./duckduckgo');
+const { findBestMatch, CONFIG: SCORING_CONFIG } = require('../utils/scoring');
 
 // ============================================================================
 // CONFIGURATION
@@ -17,10 +18,8 @@ const CONFIG = {
     MAX_REQUESTS: 50,
     RETRY_ATTEMPTS: 2,
     TIMEOUT_MS: 20000,
-    MIN_SCORE_THRESHOLD: 0.70, // 70% minimum pour accepter (augmenté de 65%)
-    MIN_PRODUCER_SCORE: 0.40, // 40% minimum pour le producer si fourni (augmenté de 30%)
-    PRODUCT_WEIGHT: 0.6,
-    PRODUCER_WEIGHT: 0.4,
+    // Scoring configuration now imported from utils/scoring.js
+    ...SCORING_CONFIG,
 };
 
 let requestCounter = 0;
@@ -452,45 +451,37 @@ function selectBestCandidate(candidates, producer, product) {
         return null;
     }
 
-    console.log('\n📊 Scoring des candidats:');
+    console.log('\n📊 Scoring des candidats avec algorithme avancé (Levenshtein + validation stricte):');
 
-    const scored = candidates.map(candidate => {
-        const scores = scoreCandidate(candidate, producer, product);
-        return {
-            ...candidate,
-            score: scores.total,
-            scoreDetails: scores,
-        };
-    });
+    // Utiliser le module de scoring avancé
+    const query = { producer, product };
+    const bestMatch = findBestMatch(query, candidates);
 
-    // Trier par score décroissant
-    scored.sort((a, b) => b.score - a.score);
-
-    // Afficher le top 3
-    scored.slice(0, 3).forEach((c, i) => {
-        console.log(`  ${i + 1}. ${c.beer_name} (${c.brewery_name || 'N/A'})`);
-        console.log(`     Score: ${(c.score * 100).toFixed(0)}% (produit: ${(c.scoreDetails.product * 100).toFixed(0)}%, producteur: ${(c.scoreDetails.producer * 100).toFixed(0)}%)`);
-    });
-
-    const best = scored[0];
-
-    // Vérification du score total
-    if (best.score < CONFIG.MIN_SCORE_THRESHOLD) {
-        console.log(`\n⚠️ Meilleur score: ${(best.score * 100).toFixed(0)}% < ${(CONFIG.MIN_SCORE_THRESHOLD * 100).toFixed(0)}% (seuil)`);
-        console.log(`   → Retourne null (préfère pas de données que de mauvaises données)`);
+    if (!bestMatch) {
+        console.log('\n⚠️ Aucun candidat ne passe les seuils de validation');
+        console.log(`   → Seuils: Score total ≥ ${(CONFIG.MIN_SCORE_THRESHOLD * 100).toFixed(0)}%, Producteur ≥ ${(CONFIG.MIN_PRODUCER_SCORE * 100).toFixed(0)}%, Produit ≥ ${(CONFIG.MIN_PRODUCT_SCORE * 100).toFixed(0)}%`);
         return null;
     }
 
-    // Vérification stricte du producer si fourni
-    if (producer && best.scoreDetails.producer < CONFIG.MIN_PRODUCER_SCORE) {
-        console.log(`\n⚠️ Score producteur trop faible: ${(best.scoreDetails.producer * 100).toFixed(0)}% < ${(CONFIG.MIN_PRODUCER_SCORE * 100).toFixed(0)}% (seuil)`);
-        console.log(`   → Producteur attendu: "${producer}", trouvé: "${best.brewery_name || 'N/A'}"`);
-        console.log(`   → Retourne null (le producteur ne correspond pas assez)`);
-        return null;
+    const { scoreResult, ...result } = bestMatch;
+
+    // Affichage détaillé
+    console.log(`\n✅ Meilleur candidat sélectionné:`);
+    console.log(`   Bière: "${bestMatch.beer_name}"`);
+    console.log(`   Brasserie: "${bestMatch.brewery_name || 'N/A'}"`);
+    console.log(`   Score final: ${(scoreResult.finalScore * 100).toFixed(0)}%`);
+    console.log(`   - Produit: ${(scoreResult.productScore * 100).toFixed(0)}%`);
+    console.log(`   - Producteur: ${(scoreResult.producerScore * 100).toFixed(0)}%`);
+    console.log(`   Confiance: ${scoreResult.confidence.toUpperCase()}`);
+
+    if (scoreResult.details.producer.warning) {
+        console.log(`   ⚠️  ${scoreResult.details.producer.reason}`);
     }
 
-    console.log(`\n✅ Meilleur candidat sélectionné: "${best.beer_name}" (${(best.score * 100).toFixed(0)}%)`);
-    const { score, scoreDetails, ...result } = best;
+    if (scoreResult.details.product.details?.penaltyReason) {
+        console.log(`   ℹ️  ${scoreResult.details.product.details.penaltyReason}`);
+    }
+
     return result;
 }
 

@@ -8,6 +8,7 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const { searchDuckDuckGo } = require('./duckduckgo');
+const { findBestMatch, CONFIG: SCORING_CONFIG } = require('../utils/scoring');
 
 // ============================================================================
 // CONFIGURATION
@@ -17,10 +18,8 @@ const CONFIG = {
     MAX_REQUESTS: 50,
     RETRY_ATTEMPTS: 2,
     TIMEOUT_MS: 20000,
-    MIN_SCORE_THRESHOLD: 0.70, // 70% minimum pour accepter (augmenté de 65%)
-    MIN_PRODUCER_SCORE: 0.40, // 40% minimum pour le producer si fourni (augmenté de 30%)
-    PRODUCT_WEIGHT: 0.6,
-    PRODUCER_WEIGHT: 0.4,
+    // Scoring configuration now imported from utils/scoring.js
+    ...SCORING_CONFIG,
 };
 
 let requestCounter = 0;
@@ -431,82 +430,8 @@ async function collectAllCandidates(producer, product) {
 }
 
 // ============================================================================
-// PHASE 2: VALIDATION & SCORING (STRICTE)
+// PHASE 2: VALIDATION & SCORING (STRICTE) - Using Advanced Scoring Module
 // ============================================================================
-
-function tokenize(text) {
-    if (!text) return [];
-    return text
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^a-z0-9\s]/g, ' ')
-        .split(/\s+/)
-        .filter(t => t.length > 0);
-}
-
-function calculateTokenOverlap(text1, text2) {
-    if (!text1 || !text2) return 0;
-
-    const tokens1 = tokenize(text1);
-    const tokens2 = tokenize(text2);
-
-    if (tokens2.length === 0) return 0;
-
-    let totalScore = 0;
-    for (const token2 of tokens2) {
-        let bestMatch = 0;
-
-        for (const token1 of tokens1) {
-            // Match exact
-            if (token1 === token2) {
-                bestMatch = 1.0;
-                break;
-            }
-
-            // Match avec pluriel
-            const t1 = token1.replace(/s$/, '');
-            const t2 = token2.replace(/s$/, '');
-            if (t1 === t2 && t1.length >= 3) {
-                bestMatch = Math.max(bestMatch, 0.95);
-                continue;
-            }
-
-            // Match substring
-            if (token1.length >= 4 && token2.length >= 4) {
-                if (token1.includes(token2) || token2.includes(token1)) {
-                    const ratio = Math.min(token1.length, token2.length) / Math.max(token1.length, token2.length);
-                    bestMatch = Math.max(bestMatch, 0.85 * ratio);
-                }
-            }
-        }
-
-        totalScore += bestMatch;
-    }
-
-    return totalScore / tokens2.length;
-}
-
-function scoreCandidate(candidate, producer, product) {
-    // Score produit (60%)
-    const productScore = calculateTokenOverlap(candidate.beer_name, product);
-
-    // Score producteur (40%)
-    let producerScore = 0;
-    if (producer && candidate.brewery_name) {
-        producerScore = calculateTokenOverlap(candidate.brewery_name, producer);
-    } else if (!producer) {
-        producerScore = 1; // Si pas de contrainte producteur, on accepte
-    }
-
-    const finalScore = (productScore * CONFIG.PRODUCT_WEIGHT) + (producerScore * CONFIG.PRODUCER_WEIGHT);
-
-    return {
-        total: finalScore,
-        product: productScore,
-        producer: producerScore,
-    };
-}
 
 function selectBestCandidate(candidates, producer, product) {
     if (!candidates || candidates.length === 0) {
@@ -514,45 +439,37 @@ function selectBestCandidate(candidates, producer, product) {
         return null;
     }
 
-    console.log('\n📊 Scoring des candidats:');
+    console.log('\n📊 Scoring des candidats avec algorithme avancé (Levenshtein + validation stricte):');
 
-    const scored = candidates.map(candidate => {
-        const scores = scoreCandidate(candidate, producer, product);
-        return {
-            ...candidate,
-            score: scores.total,
-            scoreDetails: scores,
-        };
-    });
+    // Utiliser le module de scoring avancé
+    const query = { producer, product };
+    const bestMatch = findBestMatch(query, candidates);
 
-    // Trier par score décroissant
-    scored.sort((a, b) => b.score - a.score);
-
-    // Afficher le top 3
-    scored.slice(0, 3).forEach((c, i) => {
-        console.log(`  ${i + 1}. ${c.beer_name} (${c.brewery_name || 'N/A'})`);
-        console.log(`     Score: ${(c.score * 100).toFixed(0)}% (produit: ${(c.scoreDetails.product * 100).toFixed(0)}%, producteur: ${(c.scoreDetails.producer * 100).toFixed(0)}%)`);
-    });
-
-    const best = scored[0];
-
-    // Vérification du score total
-    if (best.score < CONFIG.MIN_SCORE_THRESHOLD) {
-        console.log(`\n⚠️ Meilleur score: ${(best.score * 100).toFixed(0)}% < ${(CONFIG.MIN_SCORE_THRESHOLD * 100).toFixed(0)}% (seuil)`);
-        console.log(`   → Retourne null (préfère pas de données que de mauvaises données)`);
+    if (!bestMatch) {
+        console.log('\n⚠️ Aucun candidat ne passe les seuils de validation');
+        console.log(`   → Seuils: Score total ≥ ${(CONFIG.MIN_SCORE_THRESHOLD * 100).toFixed(0)}%, Producteur ≥ ${(CONFIG.MIN_PRODUCER_SCORE * 100).toFixed(0)}%, Produit ≥ ${(CONFIG.MIN_PRODUCT_SCORE * 100).toFixed(0)}%`);
         return null;
     }
 
-    // Vérification stricte du producer si fourni
-    if (producer && best.scoreDetails.producer < CONFIG.MIN_PRODUCER_SCORE) {
-        console.log(`\n⚠️ Score producteur trop faible: ${(best.scoreDetails.producer * 100).toFixed(0)}% < ${(CONFIG.MIN_PRODUCER_SCORE * 100).toFixed(0)}% (seuil)`);
-        console.log(`   → Producteur attendu: "${producer}", trouvé: "${best.brewery_name || 'N/A'}"`);
-        console.log(`   → Retourne null (le producteur ne correspond pas assez)`);
-        return null;
+    const { scoreResult, ...result } = bestMatch;
+
+    // Affichage détaillé
+    console.log(`\n✅ Meilleur candidat sélectionné:`);
+    console.log(`   Bière: "${bestMatch.beer_name}"`);
+    console.log(`   Brasserie: "${bestMatch.brewery_name || 'N/A'}"`);
+    console.log(`   Score final: ${(scoreResult.finalScore * 100).toFixed(0)}%`);
+    console.log(`   - Produit: ${(scoreResult.productScore * 100).toFixed(0)}%`);
+    console.log(`   - Producteur: ${(scoreResult.producerScore * 100).toFixed(0)}%`);
+    console.log(`   Confiance: ${scoreResult.confidence.toUpperCase()}`);
+
+    if (scoreResult.details.producer.warning) {
+        console.log(`   ⚠️  ${scoreResult.details.producer.reason}`);
     }
 
-    console.log(`\n✅ Meilleur candidat sélectionné: "${best.beer_name}" (${(best.score * 100).toFixed(0)}%)`);
-    const { score, scoreDetails, ...result } = best;
+    if (scoreResult.details.product.details?.penaltyReason) {
+        console.log(`   ℹ️  ${scoreResult.details.product.details.penaltyReason}`);
+    }
+
     return result;
 }
 

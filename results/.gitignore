@@ -1,6 +1,0 @@
-# Ignorer tous les fichiers JSON de résultats
-*.json
-
-# Mais garder ce fichier et le README
-!.gitignore
-!README.md

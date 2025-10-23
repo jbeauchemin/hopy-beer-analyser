@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,32 +7,165 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Producer {
-  id        Int      @id @default(autoincrement())
-  name      String   @unique
-  beers     Beer[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+enum UserRole {
+  SUPERADMIN
+  ADMIN
+  USER
+}
 
-  @@map("producers")
+model User {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email           String    @unique
+  emailVerified   DateTime? @db.Timestamp(6)
+  isEmailVerified Boolean   @default(false)
+  passwordHash    String
+  name            String?
+  username        String    @unique
+  avatarUrl       String?
+  role            UserRole  @default(USER)
+  isActive        Boolean   @default(false)
+  createdAt       DateTime  @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime  @updatedAt @db.Timestamp(6)
+  lastLoginAt     DateTime? @db.Timestamp(6)
+
+  groceryId String?  @db.Uuid
+  grocery   Grocery? @relation(fields: [groceryId], references: [id])
+
+  accounts Account[]
+  sessions Session[]
+
+  @@index([groceryId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id") @db.Uuid
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String  @map("user_id") @db.Uuid
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Grocery {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  address   String
+  city      String?
+  region    String?
+  country   String?
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @updatedAt @db.Timestamp(6)
+
+  users User[]
+}
+
+model Zone {
+  id   String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name String
+
+  danglerQrCode String @unique
+  imageUrl      String
+  rows          Int
+  columns       Int
+
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @updatedAt @db.Timestamp(6)
+}
+
+model Producer {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String   @unique
+  description String?
+  website     String?
+  logoUrl     String?
+  country     String?
+  region      String?
+  city        String?
+  createdAt   DateTime @default(now()) @db.Timestamp(6)
+  updatedAt   DateTime @updatedAt @db.Timestamp(6)
+
+  beers Beer[] @relation("ProducerBeers")
+}
+
+model Flavor {
+  id    String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name  String @unique
+  beers Beer[] @relation("BeerFlavors")
+}
+
+model BeerStyle {
+  id    String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name  String @unique
+  beers Beer[]
+}
+
+model BeerColor {
+  id    String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name  String @unique
+  beers Beer[]
 }
 
 model Beer {
-  id          Int      @id @default(autoincrement())
-  productName String
-  producerId  Int?
-  producer    Producer? @relation(fields: [producerId], references: [id])
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  codeBar       String   @unique
+  productName   String
+  abv           Decimal? @db.Decimal(4, 2)
+  ibu           Decimal? @db.Decimal(5, 2)
+  rating        Decimal  @default(0) @db.Decimal(3, 2)
+  numRatings    Int      @default(0)
+  descriptionFr String?
+  descriptionEn String?
+  imageUrl      String?
 
-  // Données de base
-  abv         Decimal?  @db.Decimal(5, 2)
-  ibu         Decimal?  @db.Decimal(5, 1)
-  rating      Decimal?  @db.Decimal(3, 2)
-  description String?   @db.Text
-  imageUrl    String?
+  styleId String?    @db.Uuid
+  style   BeerStyle? @relation(fields: [styleId], references: [id])
 
-  // Métadonnées
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  colorId String?    @db.Uuid
+  color   BeerColor? @relation(fields: [colorId], references: [id])
 
-  @@map("beers")
+  flavors Flavor[] @relation("BeerFlavors")
+
+  producerId String   @db.Uuid
+  producer   Producer @relation("ProducerBeers", fields: [producerId], references: [id])
+
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @updatedAt @db.Timestamp(6)
+
+  @@index([styleId])
+  @@index([colorId])
+  @@index([producerId])
+  @@index([styleId, colorId])
 }
+
+// npx prisma generate   
+// npx prisma migrate dev --name init

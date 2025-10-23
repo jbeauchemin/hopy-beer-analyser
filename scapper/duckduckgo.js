@@ -214,6 +214,18 @@ async function searchDuckDuckGo(query, requiredHost, requiredPathPrefix = '/prod
                 await sleep(600 + Math.random() * 800);
                 await page.goto(ddgUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
+                // IMPORTANT: Attendre que les résultats se chargent (DuckDuckGo charge async via JS)
+                try {
+                    await page.waitForSelector('article[data-testid="result"], .result, [data-testid="mainline"] a', {
+                        timeout: 5000
+                    });
+                    // Petit délai supplémentaire pour laisser tout se charger
+                    await sleep(500);
+                } catch (e) {
+                    // Continuer même si les résultats n'apparaissent pas (peut-être aucun résultat)
+                    console.log('  ⚠️  Timeout en attendant les résultats DuckDuckGo');
+                }
+
                 // Récupère tous les liens (y compris proxys uddg)
                 const anchors = await page.$$eval('a', (els) =>
                     els.map((a) => a.getAttribute('href')).filter(Boolean)

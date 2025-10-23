@@ -14,7 +14,7 @@ const { distance: levenshtein } = require('fastest-levenshtein');
 // Configuration
 const CONFIG = {
     MIN_SCORE_THRESHOLD: 0.70,          // 70% minimum global score
-    MIN_PRODUCER_SCORE: 0.50,           // 50% minimum producer score (augmenté de 40%)
+    MIN_PRODUCER_SCORE: 0.70,           // 70% minimum producer score (augmenté de 50% pour rejeter brasseries différentes)
     MIN_PRODUCT_SCORE: 0.60,            // 60% minimum product score
     PRODUCT_WEIGHT: 0.6,                // 60% weight for product
     PRODUCER_WEIGHT: 0.4,               // 40% weight for producer
@@ -79,29 +79,59 @@ function detectIncompatibleVariations(queryProduct, foundProduct) {
         };
     }
 
-    // Détection variations IPA incompatibles
-    const ipaVariations = {
-        session: /session\s*ipa/i,
-        double: /double\s*ipa|dipa/i,
-        triple: /triple\s*ipa|tipa/i,
-        imperial: /imperial\s*ipa/i,
-        standard: /\bipa\b/i,
-    };
+    // Détection variations IPA incompatibles - ordre important (du plus spécifique au moins)
+    const ipaVariations = [
+        { type: 'session', regex: /session\s*ipa/i },
+        { type: 'double', regex: /double\s*ipa|dipa/i },
+        { type: 'triple', regex: /triple\s*ipa|tipa/i },
+        { type: 'imperial', regex: /imperial\s*ipa/i },
+        { type: 'standard', regex: /\bipa\b/i },
+    ];
 
     let queryType = null;
     let foundType = null;
 
-    for (const [type, regex] of Object.entries(ipaVariations)) {
-        if (regex.test(queryProduct)) queryType = type;
-        if (regex.test(foundProduct)) foundType = type;
+    // Détecte le type le plus spécifique (session/double/triple prend priorité sur standard)
+    for (const variation of ipaVariations) {
+        if (!queryType && variation.regex.test(queryProduct)) queryType = variation.type;
+        if (!foundType && variation.regex.test(foundProduct)) foundType = variation.type;
     }
 
-    // Si les deux sont des IPAs mais de types différents (sauf standard qui est compatible avec tout)
+    // Si les deux sont des IPAs mais de types différents
     if (queryType && foundType && queryType !== foundType) {
-        if (queryType !== 'standard' && foundType !== 'standard') {
+        // Session vs Double/Triple/Imperial = incompatible
+        // Double vs Triple = incompatible
+        // Standard IPA peut matcher avec n'importe quoi SEULEMENT si le reste du nom est similaire
+
+        const incompatiblePairs = [
+            ['session', 'double'],
+            ['session', 'triple'],
+            ['session', 'imperial'],
+            ['double', 'triple'],
+            ['double', 'session'],
+            ['triple', 'session'],
+            ['imperial', 'session']
+        ];
+
+        const pair = [queryType, foundType];
+        const isIncompatible = incompatiblePairs.some(([a, b]) =>
+            (pair[0] === a && pair[1] === b) || (pair[0] === b && pair[1] === a)
+        );
+
+        if (isIncompatible) {
             return {
                 incompatible: true,
                 reason: `IPA type mismatch: query="${queryType} IPA", found="${foundType} IPA"`
+            };
+        }
+
+        // Si un est "standard" et l'autre est spécifique, appliquer une pénalité
+        if ((queryType === 'standard' && foundType !== 'standard') ||
+            (foundType === 'standard' && queryType !== 'standard')) {
+            return {
+                incompatible: false,
+                penalty: 0.20,
+                reason: `IPA specificity mismatch: "${queryType}" vs "${foundType}"`
             };
         }
     }
@@ -143,14 +173,31 @@ function validateProducer(queryProducer, foundProducer) {
         return { score: 1.0, reason: 'Exact match' };
     }
 
+    // Split into words and check common words (ignorer mots génériques)
+    const genericWords = ['inc', 'brasserie', 'microbrasserie', 'brewery', 'brewing', 'co', 'artisanale', 'craft', 'nano'];
+    const queryWords = query.split(/\s+/).filter(w => w.length > 2 && !genericWords.includes(w));
+    const foundWords = found.split(/\s+/).filter(w => w.length > 2 && !genericWords.includes(w));
+
+    const commonWords = queryWords.filter(w => foundWords.includes(w));
+    const wordMatchScore = commonWords.length / Math.max(queryWords.length, foundWords.length, 1);
+
     // Levenshtein similarity
     const similarity = calculateLevenshteinSimilarity(queryProducer, foundProducer);
 
-    // Very different producers
-    if (similarity < 0.40) {
+    // STRICT: Si aucun mot significatif en commun ET similarité faible = brasseries différentes
+    if (commonWords.length === 0 && similarity < 0.60) {
         return {
-            score: similarity,
-            reason: `Very different producers: "${queryProducer}" vs "${foundProducer}" (similarity: ${(similarity * 100).toFixed(0)}%)`,
+            score: 0,
+            reason: `Completely different breweries: "${queryProducer}" vs "${foundProducer}" (no common words, ${(similarity * 100).toFixed(0)}% similarity)`,
+            rejected: true
+        };
+    }
+
+    // Very different producers even with some similarity
+    if (similarity < 0.40 && wordMatchScore < 0.40) {
+        return {
+            score: Math.max(similarity, wordMatchScore),
+            reason: `Very different producers: "${queryProducer}" vs "${foundProducer}" (similarity: ${(similarity * 100).toFixed(0)}%, word match: ${(wordMatchScore * 100).toFixed(0)}%)`,
             warning: true
         };
     }
@@ -163,14 +210,7 @@ function validateProducer(queryProducer, foundProducer) {
         };
     }
 
-    // Split into words and check common words
-    const queryWords = query.split(/\s+/).filter(w => w.length > 2);
-    const foundWords = found.split(/\s+/).filter(w => w.length > 2);
-
-    const commonWords = queryWords.filter(w => foundWords.includes(w));
-    const wordMatchScore = commonWords.length / Math.max(queryWords.length, foundWords.length);
-
-    // Combine Levenshtein and word matching
+    // Combine Levenshtein and word matching (prendre le meilleur)
     const finalScore = Math.max(similarity, wordMatchScore);
 
     return {
@@ -204,6 +244,36 @@ function scoreProduct(queryProduct, foundProduct) {
 
     // Calculate Levenshtein similarity
     const similarity = calculateLevenshteinSimilarity(queryProduct, foundProduct);
+
+    // STRICT: Vérifier si les produits ont au moins un mot significatif en commun
+    // (exclure mots génériques comme "sans alcool", "IPA", styles de bière, etc.)
+    const genericProductWords = [
+        'sans', 'alcool', 'non', 'alcoholic', 'free',
+        'ipa', 'pale', 'ale', 'lager', 'stout', 'porter', 'pilsner', 'weizen', 'gose',
+        'blonde', 'rousse', 'noire', 'blanche', 'ambrée',
+        'session', 'double', 'triple', 'imperial',
+        'ml', 'oz', 'can', 'bouteille', 'bottle'
+    ];
+
+    const query = normalize(queryProduct);
+    const found = normalize(foundProduct);
+
+    const queryWords = query.split(/\s+/).filter(w => w.length > 2 && !genericProductWords.includes(w));
+    const foundWords = found.split(/\s+/).filter(w => w.length > 2 && !genericProductWords.includes(w));
+
+    // Si au moins 3 mots significatifs dans la query
+    if (queryWords.length >= 2) {
+        const commonWords = queryWords.filter(w => foundWords.includes(w));
+
+        // Aucun mot significatif en commun ET similarité faible = produits différents
+        if (commonWords.length === 0 && similarity < 0.50) {
+            return {
+                score: 0,
+                reason: `Completely different products: "${queryProduct}" vs "${foundProduct}" (no common words, ${(similarity * 100).toFixed(0)}% similarity)`,
+                rejected: true
+            };
+        }
+    }
 
     // Apply penalty if there's a style confusion
     let finalScore = similarity;
@@ -246,6 +316,18 @@ function calculateScore(query, found) {
     let producerResult = { score: 1.0, reason: 'No producer to validate' };
     if (queryProducer) {
         producerResult = validateProducer(queryProducer, foundProducer);
+
+        // Reject immediately if producer validation fails critically
+        if (producerResult.rejected) {
+            return {
+                finalScore: 0,
+                productScore: productResult.score,
+                producerScore: 0,
+                rejected: true,
+                reason: producerResult.reason,
+                details: { product: productResult, producer: producerResult }
+            };
+        }
     }
 
     // Calculate weighted final score

@@ -33,12 +33,20 @@ class ProgressBar {
     }
 
     updateWorker(workerId, beerName) {
+        const isFirstUpdate = !this.currentBeers.has(workerId) && beerName;
+
         if (beerName) {
             this.currentBeers.set(workerId, beerName);
         } else {
             this.currentBeers.delete(workerId);
         }
-        this.render();
+
+        // Force render on first update to show workers starting immediately
+        if (isFirstUpdate) {
+            this.forceRender();
+        } else {
+            this.render();
+        }
     }
 
     increment(success = true) {
@@ -50,6 +58,11 @@ class ProgressBar {
         this.render();
     }
 
+    forceRender() {
+        this.lastUpdateTime = Date.now();
+        this._renderContent();
+    }
+
     render() {
         // Throttle updates
         const now = Date.now();
@@ -57,6 +70,11 @@ class ProgressBar {
             return;
         }
         this.lastUpdateTime = now;
+        this._renderContent();
+    }
+
+    _renderContent() {
+        const now = Date.now();
 
         // Clear previous lines (only if we've rendered before)
         if (this.lastLineCount > 0) {

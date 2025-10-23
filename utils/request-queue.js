@@ -196,9 +196,9 @@ class RequestQueue extends EventEmitter {
 
 // Global singleton instance for DuckDuckGo requests
 const duckDuckGoQueue = new RequestQueue({
-    maxConcurrent: 2,  // Only 2 concurrent DDG requests at a time
-    minDelay: 1500,    // 1.5s minimum between requests
-    maxDelay: 2500     // 2.5s maximum delay
+    maxConcurrent: 3,  // 3 concurrent DDG requests at a time (increased from 2)
+    minDelay: 1000,    // 1s minimum between requests (reduced from 1.5s)
+    maxDelay: 1500     // 1.5s maximum delay (reduced from 2.5s)
 });
 
 // Shared Puppeteer browser instance

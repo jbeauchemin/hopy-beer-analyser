@@ -318,7 +318,7 @@ async function searchDuckDuckGo(query, requiredHost, requiredPathPrefix = '/prod
         async () => _searchDuckDuckGoInternal(query, requiredHost, requiredPathPrefix, opts),
         {
             label: `DDG: ${requiredHost} - ${query.substring(0, 30)}...`,
-            timeout: 90000,  // 90s timeout (increased from 30s)
+            timeout: 45000,  // 45s timeout (reduced from 90s for faster failure detection)
             retries: 2,
             priority: 0
         }

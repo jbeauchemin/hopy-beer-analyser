@@ -14,8 +14,8 @@ const { distance: levenshtein } = require('fastest-levenshtein');
 // Configuration
 const CONFIG = {
     MIN_SCORE_THRESHOLD: 0.70,          // 70% minimum global score
-    MIN_PRODUCER_SCORE: 0.75,           // 75% minimum producer score (augmenté pour rejeter brasseries différentes)
-    MIN_PRODUCT_SCORE: 0.65,            // 65% minimum product score (augmenté pour plus de précision)
+    MIN_PRODUCER_SCORE: 0.70,           // 70% minimum producer score
+    MIN_PRODUCT_SCORE: 0.60,            // 60% minimum product score
     PRODUCT_WEIGHT: 0.6,                // 60% weight for product
     PRODUCER_WEIGHT: 0.4,               // 40% weight for producer
 
@@ -214,7 +214,7 @@ function validateProducer(queryProducer, foundProducer) {
     }
 
     // Split into words and check common words (ignorer mots génériques)
-    const genericWords = ['inc', 'brasserie', 'microbrasserie', 'brewery', 'brewing', 'co', 'artisanale', 'craft', 'nano'];
+    const genericWords = ['inc', 'brasserie', 'microbrasserie', 'brewery', 'brewing', 'co', 'artisanale', 'craft', 'nano', 'ltee', 'ltd'];
     const queryWords = query.split(/\s+/).filter(w => w.length > 2 && !genericWords.includes(w));
     const foundWords = found.split(/\s+/).filter(w => w.length > 2 && !genericWords.includes(w));
 
@@ -224,11 +224,13 @@ function validateProducer(queryProducer, foundProducer) {
     // Levenshtein similarity
     const similarity = calculateLevenshteinSimilarity(queryProducer, foundProducer);
 
-    // STRICT: Si aucun mot significatif en commun ET similarité faible = brasseries différentes
-    if (commonWords.length === 0 && similarity < 0.60) {
+    // ULTRA-STRICT: Si AUCUN mot significatif en commun = brasseries complètement différentes
+    // Cela rejette: "Menaud" vs "UnBarred", "Charlevoix" vs "La Voie Maltée", etc.
+    // Mais garde: "Dieu du Ciel" vs "Brasserie Dieu du Ciel" (mots "dieu" et "ciel" en commun)
+    if (commonWords.length === 0) {
         return {
             score: 0,
-            reason: `Completely different breweries: "${queryProducer}" vs "${foundProducer}" (no common words, ${(similarity * 100).toFixed(0)}% similarity)`,
+            reason: `Completely different breweries: "${queryProducer}" vs "${foundProducer}" (no common significant words)`,
             rejected: true
         };
     }
@@ -301,15 +303,35 @@ function scoreProduct(queryProduct, foundProduct) {
     const queryWords = query.split(/\s+/).filter(w => w.length > 2 && !genericProductWords.includes(w));
     const foundWords = found.split(/\s+/).filter(w => w.length > 2 && !genericProductWords.includes(w));
 
-    // Si au moins 3 mots significatifs dans la query
-    if (queryWords.length >= 2) {
-        const commonWords = queryWords.filter(w => foundWords.includes(w));
+    const commonWords = queryWords.filter(w => foundWords.includes(w));
 
+    // Si au moins 2 mots significatifs dans la query
+    if (queryWords.length >= 2) {
         // Aucun mot significatif en commun ET similarité faible = produits différents
         if (commonWords.length === 0 && similarity < 0.50) {
             return {
                 score: 0,
                 reason: `Completely different products: "${queryProduct}" vs "${foundProduct}" (no common words, ${(similarity * 100).toFixed(0)}% similarity)`,
+                rejected: true
+            };
+        }
+    }
+
+    // CAS SPÉCIAL: Nom très court (1-2 mots) comme "Smash"
+    // Si le found a des mots supplémentaires importants que query n'a pas = probablement produit différent
+    if (queryWords.length <= 2 && foundWords.length > queryWords.length) {
+        // Mots du found qui ne sont PAS dans query
+        const extraWords = foundWords.filter(w => !queryWords.includes(w));
+
+        // Si des mots supplémentaires NON génériques = suspect
+        // "Smash" vs "Super Smash" → extra: ["super"] → reject
+        // "Moralité" vs "Moralité" → extra: [] → OK
+        if (extraWords.length > 0 && commonWords.length === queryWords.length) {
+            // Tous les mots de query sont dans found, mais found a des extras
+            // C'est probablement un produit différent (Super Smash ≠ Smash)
+            return {
+                score: 0,
+                reason: `Product has extra significant words: "${queryProduct}" (${queryWords.join(', ')}) vs "${foundProduct}" (extra: ${extraWords.join(', ')})`,
                 rejected: true
             };
         }

@@ -318,7 +318,15 @@ async function main() {
     setQuietMode(!args.json);
 
     // Récupérer les bières
+    if (!args.json) {
+        process.stdout.write('📥 Récupération des bières de la base de données...\n');
+    }
+
     const beers = await getBeers({ limit: args.limit });
+
+    if (!args.json) {
+        process.stdout.write(`✅ ${beers.length} bières chargées\n\n`);
+    }
 
     const stats = {
         total: beers.length,
@@ -456,7 +464,10 @@ async function main() {
 
 main()
     .catch((err) => {
-        console.error('❌ Erreur fatale:', err);
+        // Use stdout to ensure error is visible even in quiet mode
+        process.stdout.write('\n❌ Erreur fatale:\n');
+        process.stdout.write(err.stack || err.message || String(err));
+        process.stdout.write('\n');
         process.exit(1);
     })
     .finally(async () => {

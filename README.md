@@ -78,7 +78,17 @@ node beer_ai.js --save --workers=3    # 3 workers en parallèle
 node beer_ai.js --save --workers=5    # 5 workers en parallèle
 node beer_ai.js --save --workers=8    # 8 workers (recommandé pour MacBook Pro M2)
 node beer_ai.js --save --workers=10   # 10 workers (maximum recommandé)
+
+# Mode debug - affiche tous les logs détaillés des scrapers
+node beer_ai.js --debug               # Logs détaillés pour diagnostiquer des problèmes
+node beer_ai.js --debug --workers=5   # Debug avec plusieurs workers
 ```
+
+**Mode debug (`--debug`):**
+- Affiche tous les logs des scrapers (requêtes, résultats, erreurs)
+- Affiche les logs de progression des workers
+- Utile pour diagnostiquer les problèmes ou comprendre le comportement
+- Par défaut, les logs sont masqués pour une sortie propre avec barre de progression
 
 **Performance avec workers parallèles:**
 - `--workers=1` (défaut): Traitement séquentiel, ~60s par bière
@@ -89,8 +99,8 @@ node beer_ai.js --save --workers=10   # 10 workers (maximum recommandé)
 
 **Protection contre le rate limiting:**
 - Le système utilise une **queue globale** pour les requêtes DuckDuckGo
-- Maximum 2 requêtes DuckDuckGo concurrentes (peu importe le nombre de workers)
-- Délai automatique de 1.5-2.5s entre chaque requête DuckDuckGo
+- Maximum 3 requêtes DuckDuckGo concurrentes (peu importe le nombre de workers)
+- Délai automatique de 1-1.5s entre chaque requête DuckDuckGo
 - Browser Puppeteer partagé entre tous les workers
 - Retry automatique avec exponential backoff en cas d'erreur
 

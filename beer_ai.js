@@ -3,6 +3,8 @@
 //        node beer_ai.js --limit=10
 //        node beer_ai.js --json  (sortie JSON sur stdout)
 //        node beer_ai.js --save  (sauvegarder dans results/)
+//        node beer_ai.js --debug (afficher tous les logs détaillés)
+//        node beer_ai.js --workers=5 (nombre de workers parallèles)
 
 require('dotenv').config();
 const { PrismaClient, Prisma } = require('@prisma/client');
@@ -40,6 +42,7 @@ function parseArgs(argv) {
     for (const a of argv.slice(2)) {
         if (a === '--json') args.json = true;
         else if (a === '--save') args.save = true;
+        else if (a === '--debug') args.debug = true;
         else if (a.startsWith('--limit=')) args.limit = Number(a.split('=')[1]);
         else if (a.startsWith('--workers=')) args.workers = Number(a.split('=')[1]);
     }
@@ -196,12 +199,20 @@ async function processBeer(beer, stats, showOutput = true) {
 }
 
 // Traite les bières en parallèle avec un worker pool
-async function processBeersInParallel(beers, workerCount, stats, showOutput, progressBar) {
+async function processBeersInParallel(beers, workerCount, stats, showOutput, progressBar, debug = false) {
     const results = [];
     const queue = [...beers];
 
+    if (debug) {
+        console.log(`[DEBUG] processBeersInParallel démarré avec ${beers.length} bières et ${workerCount} workers`);
+    }
+
     // Crée un worker qui traite les bières de la queue
     async function worker(workerId) {
+        if (debug) {
+            console.log(`[DEBUG] Worker ${workerId} démarré`);
+        }
+
         while (queue.length > 0) {
             const beer = queue.shift();
             if (!beer) break;
@@ -209,11 +220,24 @@ async function processBeersInParallel(beers, workerCount, stats, showOutput, pro
             // Update progress with current beer
             const beerLabel = `${beer.producer?.name || ''} ${beer.productName}`.trim();
 
+            if (debug) {
+                console.log(`[DEBUG] Worker ${workerId} traite: ${beerLabel}`);
+            }
+
             if (progressBar) {
                 progressBar.updateWorker(workerId, beerLabel);
             }
 
+            if (debug) {
+                console.log(`[DEBUG] Worker ${workerId} appelle processBeer...`);
+            }
+
             const result = await processBeer(beer, stats, false); // Always quiet in batch mode
+
+            if (debug) {
+                console.log(`[DEBUG] Worker ${workerId} processBeer terminé - ${result.error ? 'ERREUR' : 'OK'}`);
+            }
+
             results.push(result);
 
             // Update progress
@@ -228,6 +252,10 @@ async function processBeersInParallel(beers, workerCount, stats, showOutput, pro
                 await new Promise(r => setTimeout(r, delay));
             }
         }
+
+        if (debug) {
+            console.log(`[DEBUG] Worker ${workerId} terminé`);
+        }
     }
 
     // Lance les workers en parallèle
@@ -238,6 +266,10 @@ async function processBeersInParallel(beers, workerCount, stats, showOutput, pro
 
     // Attend que tous les workers finissent
     await Promise.all(workers);
+
+    if (debug) {
+        console.log(`[DEBUG] Tous les workers terminés, ${results.length} résultats`);
+    }
 
     return results;
 }
@@ -316,7 +348,8 @@ async function main() {
     }
 
     // Activer le mode quiet pour les scrapers (pas de logs verbeux)
-    setQuietMode(!args.json);
+    // Sauf si --debug est activé
+    setQuietMode(!args.json && !args.debug);
 
     // Récupérer les bières
     if (!args.json) {
@@ -360,7 +393,7 @@ async function main() {
         if (!args.json) {
             process.stdout.write(`⚡ Lancement de ${workerCount} workers...\n\n`);
         }
-        results = await processBeersInParallel(beers, workerCount, stats, !args.json, progressBar);
+        results = await processBeersInParallel(beers, workerCount, stats, !args.json, progressBar, args.debug);
     } else {
         // Traitement séquentiel avec barre de progression
         for (let i = 0; i < beers.length; i++) {

@@ -200,6 +200,78 @@ async function fetchProductPage(url) {
 // PHASE 1: COLLECTE DES CANDIDATS
 // ============================================================================
 
+function generateSlugCandidates(text) {
+    if (!text) return [];
+
+    const normalized = text
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, ''); // Enlever accents
+
+    const baseSlug = normalized
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+
+    const slugs = [];
+
+    // Base
+    slugs.push(baseSlug);
+
+    // Avec numéro (variant 1, 2, 3)
+    for (let i = 1; i <= 3; i++) {
+        slugs.push(`${baseSlug}-${i}`);
+    }
+
+    // Variante sans 's' final
+    if (baseSlug.endsWith('s')) {
+        const withoutS = baseSlug.slice(0, -1);
+        slugs.push(withoutS);
+        slugs.push(`${withoutS}-1`);
+        slugs.push(`${withoutS}-2`);
+    }
+
+    return [...new Set(slugs)];
+}
+
+async function collectCandidatesFromSlugs(product) {
+    console.log('🔍 Collecte via slugs...');
+    const candidates = [];
+    const MAX_CANDIDATES = 5;
+
+    // Générer des requêtes de fallback (ex: "Blanche Poirée" → ["Poirée", "Blanche Poirée"])
+    const words = (product || '').split(' ').filter(Boolean);
+    const queryVariants = [];
+
+    // Tester les mots de droite à gauche
+    for (let i = words.length - 1; i >= 0; i--) {
+        const slice = words.slice(i).join(' ').trim();
+        if (slice.length >= 3) queryVariants.push(slice);
+    }
+
+    // Pour chaque variant, générer les slugs
+    outerLoop: for (const variant of queryVariants) {
+        const slugs = generateSlugCandidates(variant);
+
+        for (const slug of slugs) {
+            if (candidates.length >= MAX_CANDIDATES) {
+                console.log(`  ⏹️  Arrêt après ${MAX_CANDIDATES} candidats trouvés`);
+                break outerLoop;
+            }
+
+            const url = `https://masoif.com/produit/${slug}/`;
+            const parsed = await fetchProductPage(url);
+            if (parsed) {
+                console.log(`  ✓ Trouvé: ${parsed.beer_name} (${slug})`);
+                candidates.push(parsed);
+            }
+        }
+    }
+
+    return candidates;
+}
+
 async function collectCandidatesFromDuckDuckGo(producer, product) {
     console.log('🔍 Collecte via DuckDuckGo...');
     const candidates = [];
@@ -217,11 +289,17 @@ async function collectCandidatesFromDuckDuckGo(producer, product) {
 
     for (const query of queries) {
         try {
+            // Corriger l'appel: 3e paramètre = requiredPathPrefix (string), pas un objet
             const results = await searchDuckDuckGo(
                 query,
                 'masoif.com',
-                { producer, product }
+                '/produit/'  // <- Chemin correct pour masoif.com
             );
+
+            if (!results || !Array.isArray(results)) {
+                console.log('  ⚠️  Pas de résultats DuckDuckGo');
+                continue;
+            }
 
             for (const result of results) {
                 if (result && result.url) {
@@ -267,6 +345,12 @@ async function collectAllCandidates(producer, product) {
     // Collecte via DuckDuckGo
     const ddgCandidates = await collectCandidatesFromDuckDuckGo(producer, product);
     allCandidates.push(...ddgCandidates);
+
+    // Si pas assez de candidats via DuckDuckGo, essayer les slugs
+    if (allCandidates.length < 3 && product) {
+        const slugCandidates = await collectCandidatesFromSlugs(product);
+        allCandidates.push(...slugCandidates);
+    }
 
     // Dédupliquer par URL
     const unique = [];
